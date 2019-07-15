@@ -1,0 +1,6 @@
+[Core]
+Name = Tournament
+Module = tournament
+
+[Documentation]
+Description = This is a simple module to track tournament check-in to games

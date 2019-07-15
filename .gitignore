@@ -1,0 +1,6 @@
+*.log
+.idea
+.venv
+__pycache__
+config.ini
+data/*.db
