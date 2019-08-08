@@ -1,6 +1,7 @@
 import logging
 from enum import IntEnum
 
+import discord
 from errbot import BotPlugin, botcmd, Message, arg_botcmd
 
 from backends.discord.discord import DiscordPerson
@@ -29,6 +30,9 @@ class TournamentBotPlugin(BotPlugin):
         self.toornament_api_client = ToornamentAPIClient()
         if "tournaments" not in self:
             self["tournaments"] = {}
+
+    def callback_attachment(self, msg: Message, discord_msg: discord.Message):
+        print('Received a Discord message with attachemnts')
 
     @arg_botcmd(
         "--channels",

@@ -554,6 +554,10 @@ class DiscordBackend(ErrBot):
             async with recipient.get_discord_object().typing():
                 self._dispatch_to_plugins("callback_message", err_msg)
 
+            if len(msg.attachments) > 0:
+                async with recipient.get_discord_object().typing():
+                    self._dispatch_to_plugins("callback_attachment", err_msg, msg)
+
         if msg.mentions:
             self.callback_mention(
                 err_msg,
