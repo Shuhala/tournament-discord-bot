@@ -792,3 +792,9 @@ class DiscordBackend(ErrBot):
                 if role.name.lower() == name.lower():
                     return role
         return None
+
+    def get_role_members(self, name: str) -> Optional[List[str]]:
+        role = self.find_role(name)
+        if role:
+            return [str(m) for m in role.members]
+        return None

@@ -1,4 +1,5 @@
 import logging
+from dataclasses import dataclass, field, fields, asdict, is_dataclass
 from enum import IntEnum
 
 import discord
@@ -9,6 +10,123 @@ from clients.toornament_api_client import ToornamentAPIClient
 from utils.parser import *
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class BaseDataClass:
+    def __post_init__(self):
+        """
+        Convert all fields of type `dataclass` into an instance of the
+        specified data class if the current value is of type dict.
+
+        There's some real sketchy stuff here bro.
+        """
+
+        def unpack_values(field_type, val):
+            """ unpack dict if field exists for this type """
+            return field_type(
+                **{
+                    k: v
+                    for k, v in val.items()
+                    if k in {ft.name for ft in fields(field_type)}
+                }
+            )
+
+        cls = type(self)
+        for f in fields(cls):
+            is_list_of_dataclass = (
+                    hasattr(f.type, "_name")
+                    and f.type._name == "List"
+                    and is_dataclass(next(iter(f.type.__args__), None))
+            )
+            # if the field is not a dataclass, OR is not a List of dataclasses
+            if not is_dataclass(f.type) and not is_list_of_dataclass:
+                continue
+
+            value = getattr(self, f.name)
+
+            if isinstance(value, dict):
+                new_value = unpack_values(f.type, value)
+                setattr(self, f.name, new_value)
+            elif isinstance(value, list):
+                new_value = []
+                for v in value:
+                    if isinstance(v, dict):
+                        new_value.append(unpack_values(f.type.__args__[0], v))
+                setattr(self, f.name, new_value)
+
+    @classmethod
+    def from_dict(cls, values: dict):
+        class_fields = {f.name for f in fields(cls)}
+        return cls(**{k: v for k, v in values.items() if k in class_fields})
+
+    def to_dict(self):
+        return asdict(self)
+
+
+@dataclass
+class Player(BaseDataClass):
+    name: str
+    custom_fields: List[str] = field(default_factory=list)
+
+
+@dataclass
+class Team(BaseDataClass):
+    id: int
+    name: str
+    custom_fields: List[str] = field(default_factory=list)
+    lineup: List[Player] = field(default_factory=list)
+    captain: Optional[str] = field(default=None)
+
+
+@dataclass
+class ToornamentInfo(BaseDataClass):
+    id: int
+    country: str
+    discipline: str
+    location: str
+    name: str
+    scheduled_date_end: str
+    scheduled_date_start: str
+    size: int
+    status: str
+    team_max_size: int
+    team_min_size: int
+    rule: Optional[str] = field(default=None)
+    prize: Optional[str] = field(default=None)
+    platforms: List[str] = field(default_factory=list)
+
+
+@dataclass
+class Tournament(BaseDataClass):
+    tournament_id: int
+    info: ToornamentInfo = field(default=None)
+    administrator_roles: List[str] = field(default_factory=list)
+    channels: List[str] = field(default_factory=list)
+    matches: List[str] = field(default_factory=list)
+    participants: List[Team] = field(default_factory=list)
+    url: Optional[str] = field(default=None)
+
+    def count_registered_participants(self) -> int:
+        return sum([p.captain is not None for p in self.participants])
+
+    def find_team_by_captain(self, captain_name: str) -> Optional[Team]:
+        for p in self.participants:
+            if p.captain == captain_name:
+                return p
+        return None
+
+    def find_team_by_id(self, participant_id: int) -> Optional[Team]:
+        for p in self.participants:
+            if p.id == participant_id:
+                return p
+        return None
+
+    def find_team_by_name(self, team_name: str) -> Optional[Team]:
+        for p in self.participants:
+            if p.name == team_name:
+                return p
+        return None
 
 
 class MatchStatus(IntEnum):
@@ -32,7 +150,7 @@ class TournamentBotPlugin(BotPlugin):
             self["tournaments"] = {}
 
     def callback_attachment(self, msg: Message, discord_msg: discord.Message):
-        print('Received a Discord message with attachemnts')
+        print("Received a Discord message with attachemnts")
 
     @arg_botcmd(
         "--channels",
@@ -46,33 +164,31 @@ class TournamentBotPlugin(BotPlugin):
     def add_tournament(self, msg: Message, tournament_id: int, channels, roles):
         with self.mutable("tournaments") as tournaments:
             if tournament_id not in tournaments:
-                tournament = {}
-
-                # Toornament data
-                tournament_info = self.toornament_api_client.get_tournament(tournament_id)
-                if not tournament_info:
-                    return "Tournament not found."
-
-                participants = self.toornament_api_client.get_participants(tournament_id)
-                tournament_info.update({"participants": participants})
-
-                tournament.update({"info": tournament_info})
-
-                # Application data
-                tournament.setdefault("administrators", roles)
-                tournament.setdefault("channels", channels)
-                tournament.setdefault("registrations", [])
-                tournament.setdefault("matches", [])
-                tournament.update(
-                    {
-                        "url": f"https://www.toornament.com/en_US/tournaments/"
-                        f"{tournament_id}/information"
-                    }
+                tournament = Tournament(
+                    tournament_id=tournament_id,
+                    administrator_roles=roles,
+                    channels=channels,
+                    url=f"https://www.toornament.com/en_US/tournaments/"
+                    f"{tournament_id}/information",
                 )
 
-                # Add to tournaments
-                tournaments.update({tournament_id: tournament})
-                return f"Tournament '{tournament['info']['name']}' successfully added"
+                # Toornament info
+                toornament_info = self.toornament_api_client.get_tournament(tournament_id)
+                if not toornament_info:
+                    return "Tournament not found."
+                tournament.info = ToornamentInfo.from_dict(toornament_info)
+
+                # Toornament participants
+                toornament_participants = self.toornament_api_client.get_participants(
+                    tournament_id
+                )
+                tournament.participants = [
+                    Team.from_dict(p) for p in toornament_participants
+                ]
+
+                # Add to tournaments db
+                tournaments.update({tournament_id: tournament.to_dict()})
+                return f"Tournament '{tournament.info.name}' successfully added"
 
             return "Tournament already added."
 
@@ -86,264 +202,269 @@ class TournamentBotPlugin(BotPlugin):
     @arg_botcmd("--roles", type=str, nargs="+", default=[], help="Administrator roles")
     @arg_botcmd("tournament_id", type=int)
     def update_tournament(self, msg: Message, tournament_id: int, channels, roles):
+        if tournament_id not in self["tournaments"]:
+            return "Tournament not found"
+
         with self.mutable("tournaments") as tournaments:
-            tournament = tournaments.get(tournament_id)
-            if not tournament:
-                return "Tournament not found"
+            tournament = Tournament.from_dict(tournaments[tournament_id])
 
             if channels:
-                tournament["channels"].extend(channels)
-
+                tournament.channels.extend(channels)
             if roles:
-                tournament["administrators"].extend(roles)
+                tournament.administrator_roles.extend(roles)
+
+            # Save tournament changes to db
+            tournaments.update({tournament_id: tournament.to_dict()})
+
+            return f"Tournament {tournament.info.name} updated"
 
     @arg_botcmd("tournament_id", type=int)
     def refresh_tournament(self, msg: Message, tournament_id: int):
-        """ Refresh a tournament information """
-        with self.mutable("tournaments") as tournaments:
-            if tournament_id not in tournaments:
-                return "Tournament not found. Has it been added first?"
+        """ Refresh a tournament's information """
+        if tournament_id not in self["tournaments"]:
+            return "Tournament not found"
 
-            tournament_info = tournaments[tournament_id]["info"]
+        with self.mutable("tournaments") as tournaments:
+            tournament = Tournament.from_dict(tournaments[tournament_id])
 
             # update data fetched on Toornament
-            result = self.toornament_api_client.get_tournament(tournament_id)
-            if not result:
+            info = self.toornament_api_client.get_tournament(tournament_id)
+            if not info:
                 return "Tournament not found on Toornament."
-            tournament_info.update(result)
+
+            # Override current tournament info
+            tournament.info = ToornamentInfo.from_dict(**info)
 
             # update participants list
             participants = self.toornament_api_client.get_participants(tournament_id)
-            tournament_info.update({"participants": participants})
+            for participant in participants:
+                p = tournament.find_team_by_id(participant["id"])
+                if p:
+                    # Update participant name and lineup
+                    p.name = participant["name"]
+                    p.lineup = [Player(**pl) for pl in participant["lineup"]]
+                else:
+                    # Add new participant
+                    tournament.participants.append(Team.from_dict(participant))
 
-            # refresh administrators
-            for admin in tournaments[tournament_id]["administrators"]:
-                role = self._bot.find_role(admin["role"])
-                if not role:
-                    logger.error("Role not found")
-                    return
-
-                for member in role.members:
-                    admin["members"].add(str(member))
+            # Save tournament changes to db
+            tournaments.update({tournament_id: tournament.to_dict()})
 
     @arg_botcmd("tournament_id", type=int)
-    def get_tournament(self, msg, tournament_id):
+    def show_tournament(self, msg, tournament_id):
         if tournament_id not in self["tournaments"]:
             return "Tournament not found."
-
-        tournament = self["tournaments"][tournament_id]
+        tournament = Tournament.from_dict(self["tournaments"][tournament_id])
         self._send_tournament_info(msg, tournament)
 
     @botcmd
-    def get_tournaments(self, msg, args):
+    def show_tournaments(self, msg, args):
         for tournament in self["tournaments"].values():
+            tournament = Tournament.from_dict(tournament)
             self._send_tournament_info(msg, tournament)
 
     @arg_botcmd("discord_role", type=str)
     @arg_botcmd("tournament_id", type=int)
     def add_role(self, msg, tournament_id, discord_role):
         """ Associate a Discord role to a tournament """
+        if tournament_id not in self["tournaments"]:
+            return "Tournament not found."
+
         role = self._bot.find_role(discord_role)
         if not role:
             return f"Role '{discord_role}' not found"
 
         with self.mutable("tournaments") as tournaments:
-            tournament = tournaments.get(tournament_id)
-            if not tournament:
-                return f"Tournament '{tournament_id}' not found."
+            tournament = Tournament.from_dict(tournaments[tournament_id])
 
-            admin = get_tournament_administrator_by(tournament, "role", role.name)
-            if admin:
+            if role.name in tournament.administrator_roles:
                 return (
                     f"{role.name} is already a tournament administrator role "
-                    f"of '{tournament['info']['name']}'"
+                    f"of '{tournament.info.name}'"
                 )
+            tournament.administrator_roles.append(role.name)
 
-            tournament["administrators"].append(
-                {"role": role.name, "members": set(str(m) for m in role.members)}
-            )
-
-        return (
-            f"Administrator role '{role.name}' added to "
-            f"tournament '{tournament['info']['name']}'"
-        )
+            # Save tournament changes to db
+            tournaments.update({tournament_id: tournament.to_dict()})
+            return f"Role '{role.name}' added to tournament '{tournament.info.name}'"
 
     @arg_botcmd("discord_role", type=str)
     @arg_botcmd("tournament_id", type=int)
     def remove_role(self, msg, tournament_id, discord_role):
         """ Remove an associated Discord role from a tournament """
+        if tournament_id not in self["tournaments"]:
+            return "Tournament not found."
+
         role = self._bot.find_role(discord_role)
         if not role:
             return f"Role '{discord_role}' not found"
 
         with self.mutable("tournaments") as tournaments:
-            tournament = tournaments.get(tournament_id)
-            if not tournament:
-                return f"Tournament '{tournament_id}' not found."
+            tournament = Tournament.from_dict(tournaments[tournament_id])
 
-            if role.name not in tournament["administrators"]:
-                return f"{role.name} is not an administrator of '{tournament['name']}'"
+            if role.name not in tournament.administrator_roles:
+                return f"{role.name} is not an administrator of '{tournament.info.name}'"
+            tournament.administrator_roles.remove(role.name)
 
-            tournament["administrators"].pop(role.name)
+            # Save tournament changes to db
+            tournaments.update({tournament_id: tournament.to_dict()})
 
         return (
-            f"Administrator role '{role.name}' successfully removed from "
-            f"tournament '{tournament['name']}'"
+            f"Role '{role.name}' successfully removed from "
+            f"tournament '{tournament.info.name}'"
         )
 
     @arg_botcmd("team_name", type=str, nargs="+")
     @arg_botcmd("tournament_id", type=int)
     def register(self, msg: Message, tournament_id: int, team_name: List[str]):
         """ Todo: handle duplicates """
+        if tournament_id not in self["tournaments"]:
+            return "Tournament not found"
+
         team_name = " ".join(team_name)
-
         with self.mutable("tournaments") as tournaments:
-            tournament = tournaments.get(tournament_id)
-            if not tournament:
-                return f"No tournament found with the ID '{tournament_id}'"
-
-            participant = get_tournament_participant_by(tournament, "name", team_name)
+            tournament = Tournament.from_dict(tournaments[tournament_id])
+            participant = tournament.find_team_by_name(team_name)
             if not participant:
                 return (
-                    f"Team '{team_name}' not found in "
-                    f"the participants list for this tournament"
+                    f"Team {team_name} not found in the tournament {tournament.info.name}"
                 )
 
-            registration = get_tournament_registration_by(
-                tournament, "captain", msg.frm.fullname
-            )
-            if registration:
-                return (
-                    f"You are already the captain of the team "
-                    f"'{registration['name']}' in this tournament"
-                )
+            if participant.captain is not None:
+                if participant.captain == msg.frm.fullname:
+                    return (
+                        f"You are already the captain of the team "
+                        f"'{team_name}' for this tournament"
+                    )
+                else:
+                    return (
+                        f"Team '{team_name}' is already registered with the "
+                        f"captain {participant.captain}"
+                    )
 
-            registration = get_tournament_registration_by(
-                tournament, "id", participant["id"]
-            )
-            if registration:
-                return (
-                    f"Team '{team_name}' already registered with the "
-                    f"captain {registration['captain']}"
-                )
+            participant.captain = msg.frm.fullname
 
-            tournament["registrations"].append(
-                {
-                    "id": participant["id"],
-                    "name": participant["name"],
-                    "captain": msg.frm.fullname,
-                }
-            )
-
-            return f"Team '{team_name}' successfully registered for this tournament!"
-
-    @arg_botcmd("registration_id", type=str)
-    @arg_botcmd("tournament_id", type=int)
-    def unregister(self, msg: Message, tournament_id: int, registration_id: str):
-        """ TODO: Swap captains instead """
-        with self.mutable("tournaments") as tournaments:
-            tournament = tournaments.get(tournament_id)
-            if not tournament:
-                return "Tournament not found."
-
-            registration = get_tournament_registration_by(
-                tournament, "id", registration_id
-            )
-            if not registration:
-                return (
-                    f"No registration found for '{tournament['name']}' with "
-                    f"the id {registration_id}"
-                )
-
-            if msg.frm.fullname != registration["captain"]:
-                return (
-                    f"Team '{registration['name']}' not linked to your account. "
-                    f"The team captain is '{registration['captain']}'"
-                )
-
-            registration["captain"] = None
-
+            # Save tournament changes to db
+            tournaments.update({tournament_id: tournament.to_dict()})
             return (
-                f"Team '{registration['name']}' successfully unlinked with your account "
+                f"You are now the captain of the team '{team_name}' and "
+                f"successfully checked-in for this tournament!"
             )
+
+    @arg_botcmd("team_name", type=str, nargs="+")
+    @arg_botcmd("tournament_id", type=int)
+    def unregister(self, msg: Message, tournament_id: int, team_name: List[str]):
+        """ TODO: Swap captains instead """
+        if tournament_id not in self["tournaments"]:
+            return "Tournament not found"
+
+        team_name = " ".join(team_name)
+        with self.mutable("tournaments") as tournaments:
+            tournament = Tournament.from_dict(tournaments[tournament_id])
+            participant = tournament.find_team_by_name(team_name)
+            if not participant:
+                return (
+                    f"Team {team_name} not found in the tournament {tournament.info.name}"
+                )
+
+            if msg.frm.fullname != participant.captain:
+                return (
+                    f"Team '{participant.name}' not linked to your account. "
+                    f"The team captain is '{participant.captain}'"
+                )
+
+            participant.captain = None
+
+            # Save tournament changes to db
+            tournaments.update({tournament_id: tournament.to_dict()})
+            return f"Team '{participant.name}' successfully unlinked with your account"
 
     @botcmd
-    def get_registrations(self, msg, args):
-        for tournament in self["tournaments"].values():
-            for registration in tournament["registrations"]:
-                if msg.frm.fullname == registration["captain"]:
-                    participant = get_tournament_participant_by(
-                        tournament, "id", registration["id"]
-                    )
-                    self.send_card(
-                        title=f"{tournament['info']['name']} "
-                        f"({tournament['info']['id']})",
-                        fields=(
-                            ("ID", registration["id"]),
-                            ("Team", registration["name"]),
-                            (
-                                "Players",
-                                "\n".join(l["name"] for l in participant["lineup"])
-                                if participant
-                                else None,
-                            ),
-                        ),
-                        summary=f"!unregister "
-                        f"{tournament['info']['id']} "
-                        f"{registration['id']}",
-                        in_reply_to=msg,
-                    )
+    def show_status(self, msg, args):
+        for tournament_dict in self["tournaments"].values():
+            tournament = Tournament.from_dict(tournament_dict)
+
+            participant = tournament.find_team_by_captain(msg.frm.fullname)
+            if participant:
+                self.send_card(
+                    title=f"{tournament.info.name} "
+                    f"({tournament.tournament_id})",
+                    body=f"**Team ID:** {participant.id}\n"
+                         f"**Team Name:** {participant.name}\n"
+                         f"**Team Captain:** {participant.captain}\n"
+                         f"**Team Players:** " + ", ".join(
+                        pl.name for pl in participant.lineup),
+                    summary=f"To unregister, type:\n"
+                    f"!unregister "
+                    f"{tournament.tournament_id} "
+                    f"{participant.name}",
+                    in_reply_to=msg,
+                )
 
     @arg_botcmd("tournament_id", type=int)
-    def get_registered_teams(self, msg: Message, tournament_id):
+    def show_registered_teams(self, msg: Message, tournament_id):
         if tournament_id not in self["tournaments"]:
             return "Tournament doesn't exists"
 
-        tournament = self["tournaments"][tournament_id]
+        tournament = Tournament.from_dict(self["tournaments"][tournament_id])
+        participants = sorted(tournament.participants, key=lambda k: getattr(k, "name"))
+        participants = [p for p in participants if p.captain is not None]
+        if len(participants) == 0:
+            return "No team registered for this tournament"
 
-        registrations = sorted(tournament["registrations"], key=lambda k: k["name"])
-        registrations_chunks = self.chunks(registrations, 100)
+        count = 1
+        participants_chunks = self.chunks(participants, 100)
+        for i, chunk in enumerate(participants_chunks):
+            team_names = ""
+            for team in chunk:
+                team_names += f"{count}. {team.name}\n"
+                count += 1
 
-        for count, chunk in enumerate(registrations_chunks):
             self.send_card(
-                title=f"{tournament['info']['name']} Registrations "
-                f"({count + 1}/{len(registrations_chunks)})",
+                title=f"{tournament.info.name} Registered Participants"
+                f"({i + 1}/{len(participants_chunks)})",
                 body=(
                     f"Number of participants: "
-                    f"{len(tournament['info']['participants'])} \n"
+                    f"{len(tournament.participants)} \n"
                     f"Number of registrations: "
-                    f"{len(registrations)}\n\n"
-                    + f"\n ".join(f"{i + 1}) {p['name']}" for i, p in enumerate(chunk))
+                    f"{tournament.count_registered_participants()}\n\n"
+                    f"{team_names}"
                 ),
                 color="green",
                 in_reply_to=msg,
             )
 
     @arg_botcmd("tournament_id", type=int)
-    def get_unregistered_teams(self, msg: Message, tournament_id):
+    def show_unregistered_teams(self, msg: Message, tournament_id):
         if tournament_id not in self["tournaments"]:
             return "Tournament doesn't exists"
 
-        tournament = self["tournaments"][tournament_id]
+        tournament = Tournament.from_dict(self["tournaments"][tournament_id])
+        participants = sorted(tournament.participants, key=lambda k: getattr(k, "name"))
+        participants = [p for p in participants if p.captain is None]
+        if len(participants) == 0:
+            return "Every team registered for this tournament"
 
-        unregistered_participants = [
-            p
-            for p in tournament["info"]["participants"]
-            if not any(p["id"] == r["id"] for r in tournament["registrations"])
-        ]
-        registrations = sorted(unregistered_participants, key=lambda k: k["name"])
-        registrations_chunks = self.chunks(registrations, 100)
+        missing_participants_count = (
+                len(tournament.participants) - tournament.count_registered_participants()
+        )
+        count = 1
+        participants_chunks = self.chunks(participants, 100)
+        for i, chunk in enumerate(participants_chunks):
+            team_names = ""
+            for team in chunk:
+                team_names += f"{count}. {team.name}\n"
+                count += 1
 
-        for count, chunk in enumerate(registrations_chunks):
             self.send_card(
-                title=f"{tournament['info']['name']} Missing Registrations "
-                f"({count + 1}/{len(registrations_chunks)})",
+                title=f"{tournament.info.name} Missing Registrations "
+                f"({i + 1}/{len(participants_chunks)})",
                 body=(
                     f"Number of participants: "
-                    f"{len(tournament['info']['participants'])} \n"
+                    f"{len(tournament.participants)} \n"
                     f"Number of missing registrations: "
-                    f"{len(unregistered_participants)}\n\n"
-                    + f"\n ".join(f"{i + 1}) {p['name']}" for i, p in enumerate(chunk))
+                    f"{missing_participants_count}\n\n"
+                    f"{team_names}"
                 ),
                 color="green",
                 in_reply_to=msg,
@@ -480,44 +601,41 @@ class TournamentBotPlugin(BotPlugin):
                 msg.frm, "Match '{}' status set to COMPLETED.".format(match_name)
             )
 
-    def _send_tournament_info(self, msg, tournament):
-        registration = get_tournament_registration_by(
-            tournament, "captain", msg.frm.fullname
-        )
-
+    def _send_tournament_info(self, msg, tournament: Tournament):
         team_status_text = "**You are not the captain of any team in this tournament*"
-        if registration:
-            participants = get_tournament_participant_by(
-                tournament, "id", registration["id"]
-            )
-            team_players = ", ".join(l["name"] for l in participants["lineup"]) or None
+        team = tournament.find_team_by_captain(msg.frm.fullname)
+        if team is not None:
+            team_players = ", ".join(pl.name for pl in team.lineup) or None
             team_status_text = (
-                f"**Team Name:** {registration['name']}\n"
-                f"**Team Players:** {team_players}"
+                f"**Team Name:** {team.name}\n" f"**Team Players:** {team_players}"
             )
 
-        admins = ", ".join(get_tournament_administrator_members(tournament))
+        administrators = []
+        for admin_role in tournament.administrator_roles:
+            administrators.extend(self._bot.get_role_members(admin_role))
+        admins = ", ".join(administrators)
+
         self.send_card(
-            title=tournament["info"]["name"],
-            link=tournament["url"],
-            body=f"{tournament['url']}\n\n{team_status_text}",
+            title=tournament.info.name,
+            link=tournament.url,
+            body=f"{tournament.url}\n\n{team_status_text}",
             summary=f"Tournament Administrators:\t{admins}",
             fields=(
-                ("ID", tournament["info"]["id"]),
-                ("Participants", str(len(tournament["info"]["participants"]))),
-                ("Checked-in", str(len(tournament["registrations"]))),
-                ("Default channels", "\n".join(tournament["channels"]) or None),
-                ("Game", tournament["info"]["discipline"]),
-                # ("Prize", tournament["info"]["prize"]),
+                ("Tournament ID", str(tournament.info.id)),
+                ("Participants", str(len(tournament.participants))),
+                ("Registered Participants",
+                 str(tournament.count_registered_participants())),
+                ("Default channels", "\n".join(tournament.channels) or None),
+                ("Game", tournament.info.discipline),
             ),
-            color="green" if registration else "red",
+            color="green" if team else "red",
             in_reply_to=msg,
         )
 
     @staticmethod
     def chunks(l, n):
         """Yield successive n-sized chunks from l."""
-        return list(l[i : i + n] for i in range(0, len(l), n))
+        return list(l[i: i + n] for i in range(0, len(l), n))
 
     def is_tournament_admin(self, user: DiscordPerson, tournament_id) -> bool:
         if tournament_id not in self["tournaments"]:
