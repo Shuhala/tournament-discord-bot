@@ -3,7 +3,7 @@ from typing import Optional, List
 
 
 def get_tournament_participant_by(tournament: dict, key, value) -> Optional[dict]:
-    return next((p for p in tournament["info"]["participants"] if p[key] == value), None)
+    return next((p for p in tournament["info"]["teams"] if p[key] == value), None)
 
 
 def get_tournament_registration_by(tournament: dict, key, value) -> Optional[dict]:

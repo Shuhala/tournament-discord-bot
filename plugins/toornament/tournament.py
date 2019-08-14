@@ -104,26 +104,26 @@ class Tournament(BaseDataClass):
     administrator_roles: List[str] = field(default_factory=list)
     channels: List[str] = field(default_factory=list)
     matches: List[str] = field(default_factory=list)
-    participants: List[Team] = field(default_factory=list)
+    teams: List[Team] = field(default_factory=list)
     url: Optional[str] = field(default=None)
 
     def count_registered_participants(self) -> int:
-        return sum([p.captain is not None for p in self.participants])
+        return sum([p.captain is not None for p in self.teams])
 
     def find_team_by_captain(self, captain_name: str) -> Optional[Team]:
-        for p in self.participants:
+        for p in self.teams:
             if p.captain == captain_name:
                 return p
         return None
 
     def find_team_by_id(self, participant_id: int) -> Optional[Team]:
-        for p in self.participants:
+        for p in self.teams:
             if p.id == participant_id:
                 return p
         return None
 
     def find_team_by_name(self, team_name: str) -> Optional[Team]:
-        for p in self.participants:
+        for p in self.teams:
             if p.name == team_name:
                 return p
         return None
@@ -182,7 +182,7 @@ class TournamentBotPlugin(BotPlugin):
                 toornament_participants = self.toornament_api_client.get_participants(
                     tournament_id
                 )
-                tournament.participants = [
+                tournament.teams = [
                     Team.from_dict(p) for p in toornament_participants
                 ]
 
@@ -245,7 +245,7 @@ class TournamentBotPlugin(BotPlugin):
                     p.lineup = [Player(**pl) for pl in participant["lineup"]]
                 else:
                     # Add new participant
-                    tournament.participants.append(Team.from_dict(participant))
+                    tournament.teams.append(Team.from_dict(participant))
 
             # Save tournament changes to db
             tournaments.update({tournament_id: tournament.to_dict()})
@@ -407,7 +407,7 @@ class TournamentBotPlugin(BotPlugin):
             return "Tournament doesn't exists"
 
         tournament = Tournament.from_dict(self["tournaments"][tournament_id])
-        participants = sorted(tournament.participants, key=lambda k: getattr(k, "name"))
+        participants = sorted(tournament.teams, key=lambda k: getattr(k, "name"))
         participants = [p for p in participants if p.captain is not None]
         if len(participants) == 0:
             return "No team registered for this tournament"
@@ -424,8 +424,8 @@ class TournamentBotPlugin(BotPlugin):
                 title=f"{tournament.info.name} Registered Participants"
                 f"({i + 1}/{len(participants_chunks)})",
                 body=(
-                    f"Number of participants: "
-                    f"{len(tournament.participants)} \n"
+                    f"Number of teams: "
+                    f"{len(tournament.teams)} \n"
                     f"Number of registrations: "
                     f"{tournament.count_registered_participants()}\n\n"
                     f"{team_names}"
@@ -440,13 +440,13 @@ class TournamentBotPlugin(BotPlugin):
             return "Tournament doesn't exists"
 
         tournament = Tournament.from_dict(self["tournaments"][tournament_id])
-        participants = sorted(tournament.participants, key=lambda k: getattr(k, "name"))
+        participants = sorted(tournament.teams, key=lambda k: getattr(k, "name"))
         participants = [p for p in participants if p.captain is None]
         if len(participants) == 0:
             return "Every team registered for this tournament"
 
         missing_participants_count = (
-                len(tournament.participants) - tournament.count_registered_participants()
+                len(tournament.teams) - tournament.count_registered_participants()
         )
         count = 1
         participants_chunks = self.chunks(participants, 100)
@@ -460,8 +460,8 @@ class TournamentBotPlugin(BotPlugin):
                 title=f"{tournament.info.name} Missing Registrations "
                 f"({i + 1}/{len(participants_chunks)})",
                 body=(
-                    f"Number of participants: "
-                    f"{len(tournament.participants)} \n"
+                    f"Number of teams: "
+                    f"{len(tournament.teams)} \n"
                     f"Number of missing registrations: "
                     f"{missing_participants_count}\n\n"
                     f"{team_names}"
@@ -622,7 +622,7 @@ class TournamentBotPlugin(BotPlugin):
             summary=f"Tournament Administrators:\t{admins}",
             fields=(
                 ("Tournament ID", str(tournament.info.id)),
-                ("Participants", str(len(tournament.participants))),
+                ("Participants", str(len(tournament.teams))),
                 ("Registered Participants",
                  str(tournament.count_registered_participants())),
                 ("Default channels", "\n".join(tournament.channels) or None),
