@@ -44,6 +44,18 @@ class ToornamentAPIClient:
 
         return self._get_full_result(url, headers, params)
 
+    def get_participant(self, tournament_id: int, participant_id: int) -> Optional[dict]:
+        """
+        See: https://developer.toornament.com/v2/doc/organizer_tournaments#get:tournaments:id  # noqa
+        """
+        headers = self._get_headers(auth=True, scope="organizer:participant")
+        url = (
+            f"{self.api_url}/organizer/v2/tournaments/{tournament_id}"
+            f"/participants/{participant_id}"
+        )
+
+        return next(iter(self._get_full_result(url, headers)), {})
+
     def get_participants(
         self, tournament_id, params: Optional[dict] = None
     ) -> List[dict]:
@@ -53,7 +65,7 @@ class ToornamentAPIClient:
         headers = self._get_headers(Range="participants=0-49")
         url = f"{self.api_url}/viewer/v2/tournaments/{tournament_id}/participants"
 
-        return self._get_full_result(url, headers)
+        return self._get_full_result(url, headers, params=params)
 
     def _get_full_result(self, url, headers, params=None, result=None) -> List[dict]:
         if not params:
@@ -82,7 +94,7 @@ class ToornamentAPIClient:
 
         return result
 
-    def _get_headers(self, auth=False, **kwargs) -> dict:
+    def _get_headers(self, auth=False, scope=None, **kwargs) -> dict:
         headers = {
             "Content-Type": "application/json",
             "X-Api-Key": self.api_key,
@@ -90,17 +102,19 @@ class ToornamentAPIClient:
         }
 
         if auth:
-            token = self._get_access_token()
+            token = self._get_access_token(scope)
             headers.update(
                 {
-                    "Authorization": f"{token.get('token_type')} {token.get('access_token')}"
+                    "Authorization": f"{token.get('token_type')} "
+                    f"{token.get('access_token')}"
                 }
             )
 
         return headers
 
-    def _get_access_token(self) -> dict:
-        scope = "organizer:view"
+    def _get_access_token(self, scope: Optional[str] = None) -> dict:
+        if not scope:
+            scope = "organizer:view"
         now = datetime.datetime.now()
 
         if self.token:

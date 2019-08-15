@@ -1,7 +1,7 @@
 import asyncio
 import logging
-import sys
 import re
+import sys
 from abc import ABC, abstractmethod
 from typing import List, Optional, Union
 
@@ -609,11 +609,14 @@ class DiscordBackend(ErrBot):
 
         guild = DiscordBackend.client.guilds[0]
 
-        room_name = room
+        room_name = room.replace("<", "").replace(">", "")
         if room_name.startswith("##"):
             return DiscordCategory(room_name[2:], guild.id)
         elif room_name.startswith("#"):
-            return DiscordRoom(room_name[1:], guild.id)
+            if room_name[1:].isdigit():
+                return DiscordRoom.from_id(int(room_name[1:]))
+            else:
+                return DiscordRoom(room_name[1:], guild.id)
 
     def send_message(self, msg: Message):
         super().send_message(msg)
