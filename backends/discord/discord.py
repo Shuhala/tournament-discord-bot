@@ -104,6 +104,41 @@ class DiscordPerson(Person, DiscordSender):
 
         return user.name
 
+    def add_role(self, name: str):
+        if self.has_guild_role(name):
+            raise RuntimeError("User already have this role")
+        role = next(
+            (r for r in self.get_guild().roles if r.name.lower() == name.lower()), None
+        )
+        if not role:
+            raise RuntimeError("Role not found")
+
+        asyncio.run_coroutine_threadsafe(
+            self.get_discord_guild_member().add_roles(role),
+            loop=DiscordBackend.client.loop,
+        )
+
+    def remove_role(self, name: str):
+        if not self.has_guild_role(name):
+            raise RuntimeError("User doesn't have this role")
+
+        role = next(
+            (r for r in self.get_guild().roles if r.name.lower() == name.lower()), None
+        )
+        if not role:
+            raise RuntimeError("Role not found")
+
+        asyncio.run_coroutine_threadsafe(
+            self.get_discord_guild_member().remove_roles(role),
+            loop=DiscordBackend.client.loop,
+        )
+
+    def edit_nickname(self, name: str):
+        asyncio.run_coroutine_threadsafe(
+            self.get_discord_guild_member().edit(nick=name),
+            loop=DiscordBackend.client.loop,
+        )
+
     @staticmethod
     def get_guild(guild_id: Optional[int] = None) -> discord.Guild:
         """ Get discord server """
@@ -120,7 +155,7 @@ class DiscordPerson(Person, DiscordSender):
         return self.get_discord_guild_member().roles
 
     def has_guild_role(self, name: str) -> bool:
-        for role in self.get_guild_roles():
+        for role in self.get_discord_guild_member().roles:
             if role.name.lower() == name.lower():
                 return True
         return False
