@@ -43,6 +43,7 @@ COLOURS = {
     "blue": 0x0000FF,
     "white": 0xFFFFFF,
     "cyan": 0x00FFFF,
+    "grey": 0x36393F,
 }  # Discord doesn't know its colours
 
 
