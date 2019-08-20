@@ -1,0 +1,6 @@
+[Core]
+Name = TournamentManager
+Module = tournament_manager
+
+[Documentation]
+Description = Tournament Manager

@@ -22,3 +22,5 @@ BOT_ASYNC = True
 BOT_ASYNC_POOLSIZE = 10
 
 BOT_IDENTITY = {"token": config["DEFAULT"]["BOT_IDENTITY"]}
+
+CORE_PLUGINS = ("Tournament", "Help")

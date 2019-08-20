@@ -262,7 +262,7 @@ class Tournament(BaseDataClass):
         }
 
 
-class TournamentBotPlugin(BotPlugin):
+class TournamentManagerPlugin(BotPlugin):
     """
     TODO: show score submissions history
     """
@@ -271,7 +271,7 @@ class TournamentBotPlugin(BotPlugin):
 
     def activate(self):
         """ Triggers on plugin activation """
-        super(TournamentBotPlugin, self).activate()
+        super(TournamentManagerPlugin, self).activate()
         self.toornament_api_client = ToornamentAPIClient()
         if "tournaments" not in self:
             self["tournaments"] = {}
@@ -469,7 +469,7 @@ class TournamentBotPlugin(BotPlugin):
     @arg_botcmd("--channels", type=str, nargs="+", default=[])
     @arg_botcmd("--roles", type=str, nargs="+", default=[], help="Administrator roles")
     @arg_botcmd("tournament_id", type=int)
-    @arg_botcmd("alias", type=str, help="Unique tournament alias used for commands")
+    @arg_botcmd("alias", type=str, admin_only=True)
     @tournament_admin_only
     def add_tournament(self, msg: Message, alias, tournament_id: int, channels, roles):
         with self.mutable("tournaments") as tournaments:
@@ -510,7 +510,7 @@ class TournamentBotPlugin(BotPlugin):
             self.send(msg.frm, f"Tournament `{tournament.info.name}` successfully added")
             self.send_card(in_reply_to=msg, **tournament.show_card())
 
-    @arg_botcmd("alias", type=str)
+    @arg_botcmd("alias", type=str, admin_only=True)
     @tournament_admin_only
     def remove_tournament(self, msg, alias):
         """ Associate a Discord role to a tournament """
