@@ -17,7 +17,8 @@ logger = logging.getLogger(__name__)
 """
 TODO:
 - show score submissions history
-- allow multiple players to register for a team
+- allow multiple players to link a team
+- show tournaments public vs private
 """
 
 
@@ -159,6 +160,7 @@ class Team(BaseDataClass):
         return {
             "fields": (
                 ("Team Name", self.name),
+                ("Team ID", self.id),
                 ("Team Captain", self.captain),
                 ("Team Players", "\n".join(pl.name for pl in self.lineup)),
             ),
@@ -224,6 +226,7 @@ class Tournament(BaseDataClass):
     alias: str
     info: ToornamentInfo = field(default=None)
     administrator_roles: List[str] = field(default_factory=list)
+    captain_role: str = field(default=None)
     channels: List[str] = field(default_factory=list)
     matches: List[Match] = field(default_factory=list)
     teams: List[Team] = field(default_factory=list)
@@ -258,15 +261,20 @@ class Tournament(BaseDataClass):
 
     def show_card(self) -> dict:
         return {
-            "title": self.info.name,
+            "title": f"{self.alias} ({self.info.name})",
             "link": self.url,
             "fields": (
                 ("Tournament Alias", str(self.alias)),
                 ("Toornament ID", str(self.info.id)),
+                ("Game", self.info.discipline),
                 ("Linked Teams", str(self.count_linked_teams())),
                 ("Registered Teams", str(len(self.teams))),
-                ("Game", self.info.discipline),
                 ("Bot Channels", "\n".join(self.channels) or None),
+                ("Captain Role", f"@{self.captain_role}" if self.captain_role else None),
+                (
+                    "Tournament Administrator Roles",
+                    ", ".join(f"@{r}" for r in self.administrator_roles) or None,
+                ),
             ),
         }
 
@@ -461,14 +469,14 @@ class TournamentManagerPlugin(BotPlugin):
 
     @botcmd
     def show_status(self, msg, args):
-        """ Show status of your Discord account """
+        """ Show your current status """
         team, tournament = self._find_captain_team(msg.frm.fullname, self["tournaments"])
         if not team:
             return "You are not the captain of a team."
 
         self.send_card(
             title=f"{tournament.alias} ({tournament.info.name})",
-            summary=f"To unregister, type:\n!unregister {tournament.alias} {team.name}",
+            summary=f"To unregister, type:\n!unlink {tournament.alias} {team.name}",
             in_reply_to=msg,
             **team.show_card(),
         )
@@ -550,12 +558,16 @@ class TournamentManagerPlugin(BotPlugin):
 
     @arg_botcmd("--channels", type=str, nargs="+", default=[])
     @arg_botcmd("--roles", type=str, nargs="+", default=[])
+    @arg_botcmd("--captain_role", type=str)
     @arg_botcmd("tournament_id", type=int)
     @arg_botcmd("alias", type=str, admin_only=True)
     @tournament_admin_only
-    def add_tournament(self, msg: Message, alias, tournament_id: int, channels, roles):
+    def add_tournament(
+        self, msg: Message, alias, tournament_id: int, captain_role, channels, roles
+    ):
         """
-        [Admin] `!add tournament alias tournament_id --channels A B C --roles A B C`
+        [Admin] `!add tournament alias tournament_id CAPTAIN_ROLE --channels A B C
+        --roles A B C`
         """
         with self.mutable("tournaments") as tournaments:
             if alias in tournaments:
@@ -564,6 +576,7 @@ class TournamentManagerPlugin(BotPlugin):
             tournament = Tournament(
                 id=tournament_id,
                 alias=alias,
+                captain_role=captain_role,
                 url=f"https://www.toornament.com/en_US/tournaments/"
                 f"{tournament_id}/information",
             )
@@ -642,6 +655,48 @@ class TournamentManagerPlugin(BotPlugin):
             tournaments.update({alias: tournament.to_dict()})
             return f"Tournament {tournament.alias} successfully refreshed."
 
+    @arg_botcmd("role", type=str)
+    @arg_botcmd("alias", type=str)
+    @tournament_admin_only
+    def add_captain_role(self, msg, alias, role):
+        """
+        [Admin] Link a Discord role as a tournament Captain role
+        """
+        if alias not in self["tournaments"]:
+            return "Tournament not found."
+
+        if not self._bot.find_role(role):
+            return f"Role `{role}` not found"
+
+        with self.mutable("tournaments") as tournaments:
+            tournament = Tournament.from_dict(tournaments[alias])
+            tournament.captain_role = role
+
+            # Save tournament changes to db
+            tournaments.update({alias: tournament.to_dict()})
+            return (
+                f"Captain role `{role}` successfully added "
+                f"to the tournament `{tournament.alias}`"
+            )
+
+    @arg_botcmd("alias", type=str)
+    @tournament_admin_only
+    def remove_captain_role(self, msg, alias):
+        """ [Admin] Remove a tournament Discord Captain Role """
+        if alias not in self["tournaments"]:
+            return "Tournament not found."
+
+        with self.mutable("tournaments") as tournaments:
+            tournament = Tournament.from_dict(tournaments[alias])
+            tournament.captain_role = None
+
+            # Save tournament changes to db
+            tournaments.update({alias: tournament.to_dict()})
+            return (
+                f"Captain Role successfully removed for "
+                f"the tournament `{tournament.alias}`"
+            )
+
     @arg_botcmd("channel", type=str)
     @arg_botcmd("alias", type=str)
     @tournament_admin_only
@@ -718,7 +773,7 @@ class TournamentManagerPlugin(BotPlugin):
             # Save tournament changes to db
             tournaments.update({alias: tournament.to_dict()})
             return (
-                f"Role `{role}`` successfully added "
+                f"Role `{role}` successfully added "
                 f"to the tournament `{tournament.alias}`"
             )
 
@@ -833,6 +888,9 @@ class TournamentManagerPlugin(BotPlugin):
 
             # Save tournament changes to db
             tournaments.update({alias: tournament.to_dict()})
+
+            self._add_discord_team_captain(msg.frm, team_name, tournament.captain_role)
+
             return (
                 f"You are now the captain of the team `{team_name}` and "
                 f"successfully checked-in for this tournament!"
@@ -859,6 +917,7 @@ class TournamentManagerPlugin(BotPlugin):
 
             # Save tournament changes to db
             tournaments.update({tournament.alias: tournament.to_dict()})
+            self._remove_discord_team_captain(msg.frm, tournament.captain_role)
             return f"You are no longer the captain of the team `{team_name}`."
 
     """
@@ -1051,7 +1110,7 @@ class TournamentManagerPlugin(BotPlugin):
         self.send_card(
             body=f"{tournament.url}\n\n{team_status_text}",
             summary=f"Tournament Administrators:\t{admins}",
-            color="green" if team else "red",
+            color="green" if team else "grey",
             in_reply_to=msg,
             **tournament.show_card(),
         )
@@ -1066,6 +1125,34 @@ class TournamentManagerPlugin(BotPlugin):
             if team:
                 return team, tournament
         return None, None
+
+    @staticmethod
+    def _add_discord_team_captain(
+        user: DiscordPerson, team_name: str, captain_role: Optional[str]
+    ):
+        """
+        Update Discord user nickname and add role if tournament captain_role is set
+        """
+        # magic number 32, discord max username length, shhht
+        max_length = 32 - (len(user.nick) + 4)
+        discord_team_name = team_name[:max_length] + (team_name[max_length:] and "..")
+        discord_captain_name = f"{user.nick}[{discord_team_name}]"
+
+        # Update username nickname
+        user.edit_nickname(discord_captain_name)
+
+        if captain_role:
+            user.add_role(captain_role)
+
+    @staticmethod
+    def _remove_discord_team_captain(user: DiscordPerson, captain_role: Optional[str]):
+        """
+        Reset Discord user nickname and remove role if tournament captain_role is set
+        """
+        user.edit_nickname(user.username)
+
+        if captain_role:
+            user.remove_role(captain_role)
 
     def _is_tournament_admin(self, user: DiscordPerson) -> bool:
         admin_roles = list(
