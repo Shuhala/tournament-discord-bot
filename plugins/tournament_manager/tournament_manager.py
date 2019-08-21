@@ -1,3 +1,4 @@
+import itertools
 import logging
 from dataclasses import dataclass, field, fields, asdict, is_dataclass
 from datetime import datetime
@@ -8,9 +9,16 @@ from typing import Optional, List, Tuple
 import discord
 from errbot import BotPlugin, botcmd, Message, arg_botcmd
 
+from backends.discord.discord import DiscordPerson
 from clients.toornament_api_client import ToornamentAPIClient
 
 logger = logging.getLogger(__name__)
+
+"""
+TODO:
+- show score submissions history
+- allow multiple players to register for a team
+"""
 
 
 def tournament_admin_only(func):
@@ -221,7 +229,7 @@ class Tournament(BaseDataClass):
     teams: List[Team] = field(default_factory=list)
     url: Optional[str] = field(default=None)
 
-    def count_registered_participants(self) -> int:
+    def count_linked_teams(self) -> int:
         return sum([p.captain is not None for p in self.teams])
 
     def find_match_by_name(self, name: str) -> Optional[Match]:
@@ -253,20 +261,17 @@ class Tournament(BaseDataClass):
             "title": self.info.name,
             "link": self.url,
             "fields": (
-                ("Active Teams", str(self.count_registered_participants())),
-                ("Teams", str(len(self.teams))),
+                ("Tournament Alias", str(self.alias)),
+                ("Toornament ID", str(self.info.id)),
+                ("Linked Teams", str(self.count_linked_teams())),
+                ("Registered Teams", str(len(self.teams))),
                 ("Game", self.info.discipline),
-                ("Bot Alias", str(self.alias)),
                 ("Bot Channels", "\n".join(self.channels) or None),
             ),
         }
 
 
 class TournamentManagerPlugin(BotPlugin):
-    """
-    TODO: show score submissions history
-    """
-
     toornament_api_client = None
 
     def activate(self):
@@ -275,6 +280,78 @@ class TournamentManagerPlugin(BotPlugin):
         self.toornament_api_client = ToornamentAPIClient()
         if "tournaments" not in self:
             self["tournaments"] = {}
+
+    @botcmd
+    def help(self, msg, *args):
+        """ Display bot commands """
+        # Sketchy override of the bot help command
+
+        def sanitize_cmd(cmd_text: str):
+            return " ".join(l.strip() for l in cmd_text.split("\n"))
+
+        commands = []
+        linked_commands = []
+        admin_commands = []
+        for cmd_name, cmd in self._bot.commands.items():
+            # Extract command names and descriptions
+            if not hasattr(cmd, "_err_command_parser"):
+                # undocumented
+                description = self._bot.get_doc(cmd)
+                name = cmd_name
+            elif cmd._err_command_parser.description:
+                # use command docstring
+                description = sanitize_cmd(cmd._err_command_parser.description)
+                name = (
+                    cmd_name
+                    + " "
+                    + " ".join(
+                        f"*[{a.dest}]*" for a in cmd._err_command_parser._actions[1:]
+                    )
+                )
+            else:
+                # use argparse syntax
+                description = cmd._err_command_syntax
+                name = (
+                    cmd_name
+                    + " "
+                    + " ".join(
+                        f"*[{a.dest}]*" for a in cmd._err_command_parser._actions[1:]
+                    )
+                )
+
+            if "[ADMIN]" in description.upper():
+                admin_commands.append((name, description))
+            elif "[LINKED]" in description.upper():
+                linked_commands.append((name, description))
+            else:
+                commands.append((name, description))
+
+        help_message = (
+            "```General Commands```"
+            "\n*Bot available commands. "
+            "Ex: **!link [alias] [team_name]** would be `!link fortnite My Team`.\n"
+            "Note: The [alias] is the Tournament Alias field that can be found in "
+            "`!show tournaments` to show available tournament*"
+            "\n\n"
+        )
+        help_message += "\n".join(f"**!{name}**  {descr}" for name, descr in commands)
+
+        help_message += (
+            f"\n\n```Linked Accounts Commands```"
+            f"\n*Commands available to captains linked to a team*\n\n"
+        )
+        help_message += "\n".join(
+            f"**!{name}**  {descr}" for name, descr in linked_commands
+        )
+
+        self.send(msg.frm, help_message)
+
+        if self._is_tournament_admin(msg.frm):
+            help_message = "```Admin Commands```\n"
+            help_message += "\n".join(
+                f"**!{name}**  {descr}" for name, descr in admin_commands
+            )
+            self.send(msg.frm, help_message)
 
     def callback_attachment(self, msg: Message, discord_msg: discord.Message):
         """ Send screenshots in private message to bot """
@@ -366,6 +443,7 @@ class TournamentManagerPlugin(BotPlugin):
 
     @arg_botcmd("alias", type=str)
     def show_tournament(self, msg, alias):
+        """ Show a tournament """
         if alias not in self["tournaments"]:
             return "Tournament not found."
         tournament = Tournament.from_dict(self["tournaments"][alias])
@@ -373,6 +451,7 @@ class TournamentManagerPlugin(BotPlugin):
 
     @botcmd
     def show_tournaments(self, msg, args):
+        """ Show available tournaments """
         if self["tournaments"]:
             for tournament in self["tournaments"].values():
                 tournament = Tournament.from_dict(tournament)
@@ -382,6 +461,7 @@ class TournamentManagerPlugin(BotPlugin):
 
     @botcmd
     def show_status(self, msg, args):
+        """ Show status of your Discord account """
         team, tournament = self._find_captain_team(msg.frm.fullname, self["tournaments"])
         if not team:
             return "You are not the captain of a team."
@@ -395,6 +475,7 @@ class TournamentManagerPlugin(BotPlugin):
 
     @arg_botcmd("alias", type=str)
     def show_teams(self, msg: Message, alias):
+        """ Show current teams linked on Discord """
         if alias not in self["tournaments"]:
             return "Tournament doesn't exists"
 
@@ -419,7 +500,7 @@ class TournamentManagerPlugin(BotPlugin):
                     f"Number of teams: "
                     f"{len(tournament.teams)} \n"
                     f"Number of registrations: "
-                    f"{tournament.count_registered_participants()}\n\n"
+                    f"{tournament.count_linked_teams()}\n\n"
                     f"{team_names}"
                 ),
                 color="green",
@@ -428,6 +509,7 @@ class TournamentManagerPlugin(BotPlugin):
 
     @arg_botcmd("alias", type=str)
     def show_missing_teams(self, msg: Message, alias):
+        """ Show missing teams on Discord"""
         if alias not in self["tournaments"]:
             return "Tournament doesn't exists"
 
@@ -438,7 +520,7 @@ class TournamentManagerPlugin(BotPlugin):
             return "Every team registered for this tournament"
 
         missing_participants_count = (
-            len(tournament.teams) - tournament.count_registered_participants()
+            len(tournament.teams) - tournament.count_linked_teams()
         )
         count = 1
         participants_chunks = chunks(participants, 100)
@@ -467,11 +549,14 @@ class TournamentManagerPlugin(BotPlugin):
     """
 
     @arg_botcmd("--channels", type=str, nargs="+", default=[])
-    @arg_botcmd("--roles", type=str, nargs="+", default=[], help="Administrator roles")
+    @arg_botcmd("--roles", type=str, nargs="+", default=[])
     @arg_botcmd("tournament_id", type=int)
     @arg_botcmd("alias", type=str, admin_only=True)
     @tournament_admin_only
     def add_tournament(self, msg: Message, alias, tournament_id: int, channels, roles):
+        """
+        [Admin] `!add tournament alias tournament_id --channels A B C --roles A B C`
+        """
         with self.mutable("tournaments") as tournaments:
             if alias in tournaments:
                 return "Tournament with this alias already exists."
@@ -508,12 +593,11 @@ class TournamentManagerPlugin(BotPlugin):
             # Add to tournaments db
             tournaments.update({alias: tournament.to_dict()})
             self.send(msg.frm, f"Tournament `{tournament.info.name}` successfully added")
-            self.send_card(in_reply_to=msg, **tournament.show_card())
 
     @arg_botcmd("alias", type=str, admin_only=True)
     @tournament_admin_only
     def remove_tournament(self, msg, alias):
-        """ Associate a Discord role to a tournament """
+        """ [Admin] Associate a Discord role to a tournament """
         if alias not in self["tournaments"]:
             return "Tournament not found."
 
@@ -524,7 +608,9 @@ class TournamentManagerPlugin(BotPlugin):
     @arg_botcmd("alias", type=str)
     @tournament_admin_only
     def refresh_tournament(self, msg: Message, alias: str):
-        """ Refresh a tournament's information """
+        """
+        [Admin] Refresh a tournament's information
+        """
         if alias not in self["tournaments"]:
             return "Tournament not found"
 
@@ -559,8 +645,10 @@ class TournamentManagerPlugin(BotPlugin):
     @arg_botcmd("channel", type=str)
     @arg_botcmd("alias", type=str)
     @tournament_admin_only
-    def add_channels(self, msg, alias, channel):
-        """ Associate a Discord role to a tournament """
+    def add_channel(self, msg, alias, channel):
+        """
+        [Admin] Link a Discord channel to a tournament
+        """
         if alias not in self["tournaments"]:
             return "Tournament not found."
 
@@ -585,7 +673,9 @@ class TournamentManagerPlugin(BotPlugin):
     @arg_botcmd("alias", type=str)
     @tournament_admin_only
     def remove_channel(self, msg, alias, channel):
-        """ Remove a Discord channel from a tournament """
+        """
+        [Admin] Remove a linked Discord channel from a tournament
+        """
         if alias not in self["tournaments"]:
             return "Tournament not found."
 
@@ -606,7 +696,9 @@ class TournamentManagerPlugin(BotPlugin):
     @arg_botcmd("alias", type=str)
     @tournament_admin_only
     def add_role(self, msg, alias, role):
-        """ Associate a Discord role to a tournament """
+        """
+        [Admin] Link a Discord admin role to a tournament
+        """
         if alias not in self["tournaments"]:
             return "Tournament not found."
 
@@ -634,7 +726,7 @@ class TournamentManagerPlugin(BotPlugin):
     @arg_botcmd("alias", type=str)
     @tournament_admin_only
     def remove_role(self, msg, alias, role):
-        """ Remove an associated Discord role from a tournament """
+        """ [Admin] Remove a Discord admin role from a tournament """
         if alias not in self["tournaments"]:
             return "Tournament not found."
 
@@ -653,6 +745,7 @@ class TournamentManagerPlugin(BotPlugin):
     @arg_botcmd("alias", type=str)
     @tournament_admin_only
     def reset_team(self, msg: Message, alias: str, team_name: List[str]):
+        """ [Admin] Reset a team """
         if alias not in self["tournaments"]:
             return "Tournament not found"
 
@@ -683,6 +776,9 @@ class TournamentManagerPlugin(BotPlugin):
     @arg_botcmd("alias", type=str)
     @tournament_admin_only
     def remove_team(self, msg: Message, alias: str, team_name: List[str]):
+        """
+        [Admin] Remove a team from a tournament
+        """
         if alias not in self["tournaments"]:
             return "Tournament not found"
 
@@ -705,8 +801,8 @@ class TournamentManagerPlugin(BotPlugin):
 
     @arg_botcmd("team_name", type=str, nargs="+")
     @arg_botcmd("alias", type=str)
-    def register(self, msg: Message, alias: str, team_name: List[str]):
-        """ Todo: handle duplicates """
+    def link(self, msg: Message, alias: str, team_name: List[str]):
+        """ Link a Discord account with a team """
         if alias not in self["tournaments"]:
             return "Tournament not found"
 
@@ -743,8 +839,8 @@ class TournamentManagerPlugin(BotPlugin):
             )
 
     @arg_botcmd("team_name", type=str, nargs="+")
-    def unregister(self, msg: Message, team_name: List[str]):
-        """ TODO: Swap captains instead """
+    def unlink(self, msg: Message, team_name: List[str]):
+        """ [Linked] Unlink your current team with your Discord account """
 
         team_name = " ".join(team_name)
         with self.mutable("tournaments") as tournaments:
@@ -769,8 +865,9 @@ class TournamentManagerPlugin(BotPlugin):
     Matches Commands
     """
 
-    @arg_botcmd("match_name", type=str, help="Name of the match to join")
+    @arg_botcmd("match_name", type=str)
     def join(self, msg: Message, match_name: str):
+        """ [Linked] Join a match """
         with self.mutable("tournaments") as tournaments:
             team, tournament = self._find_captain_team(msg.frm.fullname, tournaments)
             if not team:
@@ -797,6 +894,7 @@ class TournamentManagerPlugin(BotPlugin):
 
     @arg_botcmd("alias", type=str)
     def show_matches(self, msg, alias):
+        """ Show the matches of a tournament """
         if alias not in self["tournaments"]:
             return "Tournament not found"
 
@@ -808,10 +906,11 @@ class TournamentManagerPlugin(BotPlugin):
         )
 
     @tournament_admin_only
-    @arg_botcmd("match_name", type=str, help="Name of the match to join")
+    @arg_botcmd("match_name", type=str)
     @arg_botcmd("alias", type=str)
     @tournament_admin_only
     def show_match_scores(self, msg, alias: str, match_name: str):
+        """ [Admin] Show a tournament match scores """
         if alias not in self["tournaments"]:
             return "Tournament not found"
 
@@ -833,11 +932,12 @@ class TournamentManagerPlugin(BotPlugin):
                 color="white",
             )
 
-    @arg_botcmd("password", type=str, help="Match lobby password")
+    @arg_botcmd("password", type=str)
     @arg_botcmd("match_name", type=str)
     @arg_botcmd("alias", type=str)
     @tournament_admin_only
     def create_match(self, msg, alias, match_name, password):
+        """ [Admin] Create a tournament match """
         if alias not in self["tournaments"]:
             return "Tournament not found"
 
@@ -855,10 +955,11 @@ class TournamentManagerPlugin(BotPlugin):
             self.send(msg.frm, f"Match `{match_name}` successfully created.")
             self._show_match(msg, tournament, match, public=False)
 
-    @arg_botcmd("match_name", type=str, help="Name of the match to join")
+    @arg_botcmd("match_name", type=str)
     @arg_botcmd("alias", type=str)
     @tournament_admin_only
     def start_match(self, msg, alias: str, match_name: str):
+        """ [Admin] Start a tournament match """
         if alias not in self["tournaments"]:
             return "Tournament not found"
 
@@ -888,10 +989,11 @@ class TournamentManagerPlugin(BotPlugin):
             tournaments.update({alias: tournament.to_dict()})
             self.send(msg.frm, f"Match `{match_name}` status set to ONGOING.")
 
-    @arg_botcmd("match_name", type=str, help="Name of the match to join")
+    @arg_botcmd("match_name", type=str)
     @arg_botcmd("alias", type=str)
     @tournament_admin_only
     def end_match(self, msg, alias: str, match_name: str):
+        """ [Admin] End a tournament match """
         if alias not in self["tournaments"]:
             return "Tournament not found"
 
@@ -924,8 +1026,7 @@ class TournamentManagerPlugin(BotPlugin):
                 ("Status", f"{match.status.name}\n"),
                 (
                     "Teams Ready",
-                    f"{len(match.teams_ready)}/"
-                    f"{tournament.count_registered_participants()}\n",
+                    f"{len(match.teams_ready)}/" f"{tournament.count_linked_teams()}\n",
                 ),
                 ("Created by", f"{match.created_by}\n"),
                 additional_fields if additional_fields else (".", "."),
@@ -965,6 +1066,18 @@ class TournamentManagerPlugin(BotPlugin):
             if team:
                 return team, tournament
         return None, None
+
+    def _is_tournament_admin(self, user: DiscordPerson) -> bool:
+        admin_roles = list(
+            itertools.chain(
+                *[t["administrator_roles"] for t in self["tournaments"].values()]
+            )
+        )
+        if user.fullname in self.bot_config.BOT_ADMINS or any(
+            user.has_guild_role(r) for r in admin_roles
+        ):
+            return True
+        return False
 
 
 def chunks(l, n):
