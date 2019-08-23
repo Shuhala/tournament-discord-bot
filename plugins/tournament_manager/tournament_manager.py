@@ -18,14 +18,10 @@ from clients.toornament_api_client import ToornamentAPIClient
 
 logger = logging.getLogger(__name__)
 
-"""
-TODO:
-[Admin]
-- Limit channels where the bot can be used
-"""
-
 
 def tournament_admin_only(func):
+    """ Allow a command to be used by a tournament admin only """
+
     @wraps(func)
     def wrap(*args, **kwargs):
         plugin, msg, *_ = args
@@ -40,6 +36,47 @@ def tournament_admin_only(func):
                 return func(*args, **kwargs)
 
         plugin.send(msg.frm, "You are not allowed to perform this action")
+
+    return wrap
+
+
+def private_message_only(func):
+    """ Allow a command to be used in private message only """
+
+    @wraps(func)
+    def wrap(*args, **kwargs):
+        plugin, msg, *_ = args
+        if msg.is_direct:
+            return func(*args, **kwargs)
+        plugin.send(msg.frm, "Please use this command in private message.")
+
+    return wrap
+
+
+def tournament_channel_only(func):
+    """ Allow a command to be used in private message only """
+
+    @wraps(func)
+    def wrap(*args, **kwargs):
+        def sanitize_channel(name):
+            return name.replace("<", "").replace(">", "")
+
+        plugin, msg, *_ = args
+        room = sanitize_channel(str(msg.frm.room))
+        tournament_channels = plugin["tournaments"][kwargs["alias"]]["channels"]
+        # no tournament channel set
+        if not tournament_channels:
+            return func(*args, **kwargs)
+        # tournament channel set
+        for channel in tournament_channels:
+            if sanitize_channel(channel) == room:
+                return func(*args, **kwargs)
+
+        plugin.send(
+            msg.frm,
+            "Please use this command in the tournament assigned bot channels: "
+            + " ".join(tournament_channels),
+        )
 
     return wrap
 
@@ -290,6 +327,7 @@ class TournamentManagerPlugin(BotPlugin):
             self["tournaments"] = {}
 
     @botcmd
+    @private_message_only
     def help(self, msg, *args):
         """ Display bot commands """
 
@@ -342,19 +380,21 @@ class TournamentManagerPlugin(BotPlugin):
             "be found in the tournaments description. Try `!show tournaments` !*"
             "\n\n"
         )
-        help_message += "\n".join(f"**!{name}**\n    {descr}" for name, descr in commands)
+        help_message += "\n".join(
+            f"- **!{name}**\n    {descr}" for name, descr in commands
+        )
 
         help_message += (
             f"\n\n```Linked Captains Commands```"
             f"*Commands available to captains linked to a team*\n\n"
         )
         help_message += "\n".join(
-            f"**!{name}**\n    {descr}" for name, descr in linked_commands
+            f"- **!{name}**\n    {descr[8:]}" for name, descr in linked_commands
         )
         # Special commands
         help_message += (
-            "\n\n**!submit *[match_name]* position *[number]* eliminations *[number]***\n"
-            "***THIS COMMAND MUST BE SENT IN PRIVATE TO THE BOT WITH A SCREENSHOT "
+            "\n- **!submit *[match_name]* position *[number]* eliminations *[number]***"
+            "\n***THIS COMMAND MUST BE SENT IN PRIVATE TO THE BOT WITH A SCREENSHOT "
             "ATTACHED TO IT***\n"
             "Submit your team score for a match. "
             "E.g. with an attached screenshot, add the message: `!submit game_1 position "
@@ -372,8 +412,8 @@ class TournamentManagerPlugin(BotPlugin):
 
         if self._is_tournament_admin(msg.frm):
             help_message = "```Admin Commands```"
-            help_message += "\n".join(
-                f"**!{name}**\n    {descr}" for name, descr in admin_commands
+            help_message += "\n\n".join(
+                f"- **!{name}**\n    {descr[8:]}" for name, descr in admin_commands
             )
             self.send(msg.frm, help_message)
 
@@ -495,6 +535,7 @@ class TournamentManagerPlugin(BotPlugin):
             return "No tournaments to show."
 
     @botcmd
+    @private_message_only
     def show_status(self, msg, args):
         """ Show your current status. """
         team, tournament = self._find_captain_team(msg.frm.fullname, self["tournaments"])
@@ -509,6 +550,7 @@ class TournamentManagerPlugin(BotPlugin):
         )
 
     @arg_botcmd("alias", type=str)
+    @tournament_channel_only
     def show_teams(self, msg: Message, alias):
         """
         Show current teams linked on Discord.
@@ -546,6 +588,7 @@ class TournamentManagerPlugin(BotPlugin):
             )
 
     @arg_botcmd("alias", type=str)
+    @tournament_channel_only
     def show_missing_teams(self, msg: Message, alias):
         """
         Show teams not linked on Discord.
@@ -592,6 +635,7 @@ class TournamentManagerPlugin(BotPlugin):
     @arg_botcmd("tournament_id", type=int)
     @arg_botcmd("alias", type=str, admin_only=True)
     @tournament_admin_only
+    @private_message_only
     def add_tournament(self, msg: Message, alias, tournament_id: int):
         """
         [Admin] `!add tournament fortnite 123456789`
@@ -625,6 +669,7 @@ class TournamentManagerPlugin(BotPlugin):
 
     @arg_botcmd("alias", type=str, admin_only=True)
     @tournament_admin_only
+    @private_message_only
     def remove_tournament(self, msg, alias):
         """
         [Admin] Associate a Discord role to a tournament.
@@ -639,6 +684,7 @@ class TournamentManagerPlugin(BotPlugin):
 
     @arg_botcmd("alias", type=str)
     @tournament_admin_only
+    @private_message_only
     def refresh_tournament(self, msg: Message, alias: str):
         """
         [Admin] Refresh a tournament's information.
@@ -705,6 +751,7 @@ class TournamentManagerPlugin(BotPlugin):
 
     @arg_botcmd("alias", type=str)
     @tournament_admin_only
+    @private_message_only
     def remove_captain_role(self, msg, alias):
         """ [Admin] Remove a tournament Discord Captain Role """
         if alias not in self["tournaments"]:
@@ -724,6 +771,7 @@ class TournamentManagerPlugin(BotPlugin):
     @arg_botcmd("channel", type=str)
     @arg_botcmd("alias", type=str)
     @tournament_admin_only
+    @private_message_only
     def add_channel(self, msg, alias, channel):
         """
         [Admin] Link a Discord channel to a tournament.
@@ -752,10 +800,11 @@ class TournamentManagerPlugin(BotPlugin):
     @arg_botcmd("channel", type=str)
     @arg_botcmd("alias", type=str)
     @tournament_admin_only
+    @private_message_only
     def remove_channel(self, msg, alias, channel):
         """
         [Admin] Remove a linked Discord channel from a tournament.
-        E.g. `!remove channel fornite #fortnite-tournament`
+        E.g. !remove channel fornite #fortnite-tournament
         """
         if alias not in self["tournaments"]:
             return "Tournament not found."
@@ -776,6 +825,7 @@ class TournamentManagerPlugin(BotPlugin):
     @arg_botcmd("role", type=str, nargs="+")
     @arg_botcmd("alias", type=str)
     @tournament_admin_only
+    @private_message_only
     def add_admin_role(self, msg, alias: str, role: List[str]):
         """
         [Admin] Link a Discord admin role to a tournament.
@@ -808,6 +858,7 @@ class TournamentManagerPlugin(BotPlugin):
     @arg_botcmd("role", type=str, nargs="+")
     @arg_botcmd("alias", type=str)
     @tournament_admin_only
+    @private_message_only
     def remove_admin_role(self, msg, alias: str, role: List[str]):
         """
         [Admin] Remove a Discord admin role from a tournament.
@@ -831,6 +882,7 @@ class TournamentManagerPlugin(BotPlugin):
     @arg_botcmd("team_id", type=int)
     @arg_botcmd("alias", type=str)
     @tournament_admin_only
+    @private_message_only
     def reset_team(self, msg: Message, alias: str, team_id: int):
         """
         [Admin] Reset a team information and linked captain.
@@ -854,6 +906,10 @@ class TournamentManagerPlugin(BotPlugin):
             if not participant:
                 return "Could not retrieve participant's info"
 
+            if team.captain:
+                self._remove_discord_team_captain(
+                    self.build_identifier(team.captain), tournament.captain_role
+                )
             team.captain = None
             team.lineup = [Player.from_dict(pl) for pl in participant["lineup"]]
             team.custom_fields = participant["custom_fields"]
@@ -867,6 +923,7 @@ class TournamentManagerPlugin(BotPlugin):
     @arg_botcmd("team_id", type=int)
     @arg_botcmd("alias", type=str)
     @tournament_admin_only
+    @private_message_only
     def link_team_captain(self, msg, alias: str, discord_user: str, team_id: int):
         """
         [Admin] Set a discord user as a team linked captain.
@@ -905,6 +962,7 @@ class TournamentManagerPlugin(BotPlugin):
 
     @arg_botcmd("team_name", type=str, nargs="+")
     @arg_botcmd("alias", type=str)
+    @tournament_channel_only
     def show_team(self, msg: Message, alias: str, team_name: List[str]):
         """
         Show a team information.
@@ -932,6 +990,7 @@ class TournamentManagerPlugin(BotPlugin):
     @arg_botcmd("team_id", type=int)
     @arg_botcmd("alias", type=str)
     @tournament_admin_only
+    @private_message_only
     def remove_team(self, msg: Message, alias: str, team_id: int):
         """
         [Admin] Remove a team from a tournament.
@@ -946,6 +1005,10 @@ class TournamentManagerPlugin(BotPlugin):
             if not team:
                 return f"Team `{team_id}` not found in the tournament {tournament.alias}"
 
+            if team.captain:
+                self._remove_discord_team_captain(
+                    self.build_identifier(team.captain), tournament.captain_role
+                )
             tournament.teams.remove(team)
 
             # Save tournament changes to db
@@ -958,6 +1021,7 @@ class TournamentManagerPlugin(BotPlugin):
 
     @arg_botcmd("team_name", type=str, nargs="+")
     @arg_botcmd("alias", type=str)
+    @tournament_channel_only
     def link(self, msg: Message, alias: str, team_name: List[str]):
         """
         Link your Discord account with a team to become the captain of this team.
@@ -1004,6 +1068,7 @@ class TournamentManagerPlugin(BotPlugin):
             )
 
     @arg_botcmd("team_name", type=str, nargs="+")
+    @tournament_channel_only
     def unlink(self, msg: Message, team_name: List[str]):
         """
         [Linked] Unlink your current team with your Discord account.
@@ -1035,6 +1100,7 @@ class TournamentManagerPlugin(BotPlugin):
     """
 
     @arg_botcmd("match_name", type=str)
+    @tournament_channel_only
     def join(self, msg: Message, match_name: str):
         """
         [Linked] Join a match.
@@ -1065,6 +1131,7 @@ class TournamentManagerPlugin(BotPlugin):
             self._show_match(msg, tournament, match, public=False)
 
     @arg_botcmd("alias", type=str)
+    @private_message_only
     def show_matches(self, msg, alias):
         """
         Show the matches of a tournament.
@@ -1081,6 +1148,7 @@ class TournamentManagerPlugin(BotPlugin):
         )
 
     @botcmd
+    @private_message_only
     def show_score_history(self, msg, *args):
         """
         [Linked] Show your linked team match score history.
@@ -1103,6 +1171,7 @@ class TournamentManagerPlugin(BotPlugin):
     @arg_botcmd("match_name", type=str)
     @arg_botcmd("alias", type=str)
     @tournament_admin_only
+    @private_message_only
     def show_match_scores(self, msg, alias: str, match_name: str):
         """
         [Admin] Show a tournament match score submissions.
@@ -1135,6 +1204,7 @@ class TournamentManagerPlugin(BotPlugin):
     @arg_botcmd("match_name", type=str)
     @arg_botcmd("alias", type=str)
     @tournament_admin_only
+    @private_message_only
     def download_match_scores(self, msg, alias: str, match_name: str):
         """
         [Admin] Download a match score submissions.
@@ -1189,6 +1259,7 @@ class TournamentManagerPlugin(BotPlugin):
     @arg_botcmd("match_name", type=str)
     @arg_botcmd("alias", type=str)
     @tournament_admin_only
+    @private_message_only
     def create_match(self, msg, alias, match_name, password):
         """
         [Admin] Create a tournament match.
