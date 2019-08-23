@@ -180,8 +180,8 @@ class DiscordPerson(Person, DiscordSender):
     def aclattr(self) -> str:
         return self.fullname
 
-    async def send(self, content: str = None, embed: discord.Embed = None):
-        await self.discord_user().send(content=content, embed=embed)
+    async def send(self, content: str = None, embed: discord.Embed = None, file=None):
+        await self.discord_user().send(content=content, embed=embed, file=file)
 
     def __eq__(self, other):
         return isinstance(other, DiscordPerson) and other.aclattr == self.aclattr
@@ -653,6 +653,11 @@ class DiscordBackend(ErrBot):
                 return DiscordRoom.from_id(int(room_name[1:]))
             else:
                 return DiscordRoom(room_name[1:], guild.id)
+
+    def send_file(self, user: DiscordPerson, filepath):
+        file = discord.File(filepath, filename=filepath)
+        log.debug("Sending file to user")
+        asyncio.run_coroutine_threadsafe(user.send(file=file), loop=self.client.loop)
 
     def send_message(self, msg: Message):
         super().send_message(msg)
