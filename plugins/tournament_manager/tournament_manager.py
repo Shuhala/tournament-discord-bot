@@ -17,8 +17,12 @@ logger = logging.getLogger(__name__)
 """
 TODO:
 - show score submissions history
-- allow multiple players to link a team
-- show tournaments public vs private
+[Admin]
+- Remove team by ID
+- Add team by ID
+- Add captain by team ID
+- Send message to team captains
+- Limit channels where the bot can be used
 """
 
 
@@ -336,28 +340,43 @@ class TournamentManagerPlugin(BotPlugin):
 
         help_message = (
             "```General Commands```"
-            "\n*Bot available commands. "
-            "Ex: **!link [alias] [team_name]** would be `!link fortnite My Team`.\n"
-            "Note: The [alias] is the Tournament Alias field that can be found in "
-            "`!show tournaments` to show available tournament*"
+            "*Bot available commands. "
+            "\nNote: The **[alias]** parameter is the `Tournament Alias` field that can "
+            "be found in the tournaments description. Try `!show tournaments` !*"
             "\n\n"
         )
-        help_message += "\n".join(f"**!{name}**  {descr}" for name, descr in commands)
+        help_message += "\n\n".join(f"**!{name}**\n{descr}" for name, descr in commands)
 
         help_message += (
-            f"\n\n```Linked Accounts Commands```"
-            f"\n*Commands available to captains linked to a team*\n\n"
+            f"\n\n```Linked Captains Commands```"
+            f"*Commands available to captains linked to a team*\n\n"
         )
-        help_message += "\n".join(
-            f"**!{name}**  {descr}" for name, descr in linked_commands
+        help_message += "\n\n".join(
+            f"**!{name}**\n{descr}" for name, descr in linked_commands
+        )
+        # Special commands
+        help_message += (
+            "\n\n**!submit *[match_name]* position *[number]* eliminations *[number]***\n"
+            "***THIS COMMAND MUST BE SENT IN PRIVATE TO THE BOT WITH A SCREENSHOT "
+            "ATTACHED TO IT***\n"
+            "Submit your team score for a match. "
+            "E.g. with an attached screenshot, add the message: `!submit game_1 position "
+            "2 eliminations 5` to submit a score where your position is `2`nd and number "
+            "of eliminations `5` for the match named `game_1`.\n"
+            "- Score submissions are disabled when a match status is set to COMPLETED.\n"
+            "- If you made a mistake while submitting your score, use this command "
+            "again to override the previous submission for this match.\n"
+            "- The information submitted must match the one visible on your screenshot. "
+            "Submitting a different score than what is displayed on your screenshot "
+            "will result in a sanction.\n"
         )
 
         self.send(msg.frm, help_message)
 
         if self._is_tournament_admin(msg.frm):
-            help_message = "```Admin Commands```\n"
-            help_message += "\n".join(
-                f"**!{name}**  {descr}" for name, descr in admin_commands
+            help_message = "```Admin Commands```"
+            help_message += "\n\n".join(
+                f"**!{name}**\n{descr}" for name, descr in admin_commands
             )
             self.send(msg.frm, help_message)
 
@@ -365,7 +384,7 @@ class TournamentManagerPlugin(BotPlugin):
         """ Send screenshots in private message to bot """
         if hasattr(msg.to, "fullname") and msg.to.fullname == str(self.bot_identifier):
             msg_parts = msg.body.strip().split(" ")
-            if not msg_parts or not msg_parts[0] == "submit":
+            if not msg_parts or not msg_parts[0] == "!submit":
                 self.send(
                     msg.frm,
                     (
@@ -373,10 +392,7 @@ class TournamentManagerPlugin(BotPlugin):
                         "Unfortunately, I'm unsure what I'm supposed to do with that."
                         " Are you trying to submit a match score screenshot?\n"
                         "Try to send me this again with the text: "
-                        "`submit MATCH_NAME position X eliminations Y`.\n"
-                        "For example: `submit game_1 position 2 eliminations 5`"
-                        " to submit a score where your position is `2`nd and number of"
-                        " eliminations `5` for the match named `game_1`."
+                        "`submit [match_name] position [number] eliminations [number]`.\n"
                     ),
                 )
                 return
@@ -387,13 +403,8 @@ class TournamentManagerPlugin(BotPlugin):
                     (
                         "Looks like you're trying to submit your score!\n\n"
                         "Your screenshot must be followed with the following"
-                        " information: `submit MATCH_NAME position X eliminations Y`\n"
-                        "\nFor example:"
-                        "`submit game_1 position 2 eliminations 5` to submit a score"
-                        " where your position is `2`nd and number of eliminations `5`"
-                        " for the match named `game_1`.\n\n"
-                        "Submitting a different score than what is displayed on your"
-                        " screenshot is forbidden and might result in a sanction."
+                        " information: "
+                        "`!submit [match_name] position [number] eliminations [number]`\n"
                     ),
                 )
                 return
@@ -402,8 +413,7 @@ class TournamentManagerPlugin(BotPlugin):
             if not position.isdigit() or not eliminations.isdigit():
                 self.send(
                     msg.frm,
-                    "Invalid entries for position and eliminations. "
-                    "A number was expected",
+                    "Invalid entry for position or eliminations. A number was expected.",
                 )
                 return
 
@@ -413,7 +423,8 @@ class TournamentManagerPlugin(BotPlugin):
                     self.send(msg.frm, "You are not the captain of a team.")
                     return
 
-                if not tournament.find_match_by_name(match_name):
+                match = tournament.find_match_by_name(match_name)
+                if not match:
                     # We also allow teams that haven't joined the match to
                     # submit their score in case something happened, we still
                     # want them to enjoy this feature.
@@ -422,6 +433,15 @@ class TournamentManagerPlugin(BotPlugin):
                         f"There is no match with the name `{match_name}` for "
                         f"the `{tournament.alias}` tournament. Can't submit "
                         f"score.",
+                    )
+                    return
+
+                if match.status == MatchStatus.COMPLETED:
+                    self.send(
+                        msg.frm,
+                        f"Can't submit a match score for the match `{match_name}`. "
+                        f"Match status is set to COMPLETED. Submissions are now locked. "
+                        f"Please contact your Tournament Administrator.",
                     )
                     return
 
@@ -451,7 +471,10 @@ class TournamentManagerPlugin(BotPlugin):
 
     @arg_botcmd("alias", type=str)
     def show_tournament(self, msg, alias):
-        """ Show a tournament """
+        """
+        Show a tournament.
+        E.g. `!show tournament fortnite`
+        """
         if alias not in self["tournaments"]:
             return "Tournament not found."
         tournament = Tournament.from_dict(self["tournaments"][alias])
@@ -459,7 +482,7 @@ class TournamentManagerPlugin(BotPlugin):
 
     @botcmd
     def show_tournaments(self, msg, args):
-        """ Show available tournaments """
+        """ Show available tournaments. E.g. `!show tournaments` """
         if self["tournaments"]:
             for tournament in self["tournaments"].values():
                 tournament = Tournament.from_dict(tournament)
@@ -469,7 +492,7 @@ class TournamentManagerPlugin(BotPlugin):
 
     @botcmd
     def show_status(self, msg, args):
-        """ Show your current status """
+        """ Show your current status. """
         team, tournament = self._find_captain_team(msg.frm.fullname, self["tournaments"])
         if not team:
             return "You are not the captain of a team."
@@ -483,7 +506,10 @@ class TournamentManagerPlugin(BotPlugin):
 
     @arg_botcmd("alias", type=str)
     def show_teams(self, msg: Message, alias):
-        """ Show current teams linked on Discord """
+        """
+        Show current teams linked on Discord.
+        E.g. `!show teams fortnite`
+        """
         if alias not in self["tournaments"]:
             return "Tournament doesn't exists"
 
@@ -517,7 +543,10 @@ class TournamentManagerPlugin(BotPlugin):
 
     @arg_botcmd("alias", type=str)
     def show_missing_teams(self, msg: Message, alias):
-        """ Show missing teams on Discord"""
+        """
+        Show teams not linked on Discord.
+        E.g. `!show missing teams fortnite`
+        """
         if alias not in self["tournaments"]:
             return "Tournament doesn't exists"
 
@@ -556,18 +585,12 @@ class TournamentManagerPlugin(BotPlugin):
     Tournament Management
     """
 
-    @arg_botcmd("--channels", type=str, nargs="+", default=[])
-    @arg_botcmd("--roles", type=str, nargs="+", default=[])
-    @arg_botcmd("--captain_role", type=str)
     @arg_botcmd("tournament_id", type=int)
     @arg_botcmd("alias", type=str, admin_only=True)
     @tournament_admin_only
-    def add_tournament(
-        self, msg: Message, alias, tournament_id: int, captain_role, channels, roles
-    ):
+    def add_tournament(self, msg: Message, alias, tournament_id: int):
         """
-        [Admin] `!add tournament alias tournament_id CAPTAIN_ROLE --channels A B C
-        --roles A B C`
+        [Admin] `!add tournament fortnite 123456789`
         """
         with self.mutable("tournaments") as tournaments:
             if alias in tournaments:
@@ -576,20 +599,9 @@ class TournamentManagerPlugin(BotPlugin):
             tournament = Tournament(
                 id=tournament_id,
                 alias=alias,
-                captain_role=captain_role,
                 url=f"https://www.toornament.com/en_US/tournaments/"
                 f"{tournament_id}/information",
             )
-
-            for channel in channels:
-                if not self.query_room(channel):
-                    return "Invalid channel name"
-                tournament.channels.append(channel)
-
-            for role in roles:
-                if not self._bot.find_role(role):
-                    return "Invalid role name"
-                tournament.administrator_roles.append(role)
 
             # Toornament info
             toornament_info = self.toornament_api_client.get_tournament(tournament_id)
@@ -610,7 +622,10 @@ class TournamentManagerPlugin(BotPlugin):
     @arg_botcmd("alias", type=str, admin_only=True)
     @tournament_admin_only
     def remove_tournament(self, msg, alias):
-        """ [Admin] Associate a Discord role to a tournament """
+        """
+        [Admin] Associate a Discord role to a tournament.
+        E.g. `!remove tournament fortnite`
+        """
         if alias not in self["tournaments"]:
             return "Tournament not found."
 
@@ -622,7 +637,8 @@ class TournamentManagerPlugin(BotPlugin):
     @tournament_admin_only
     def refresh_tournament(self, msg: Message, alias: str):
         """
-        [Admin] Refresh a tournament's information
+        [Admin] Refresh a tournament's information.
+        E.g. `!refresh tournament fortnite`
         """
         if alias not in self["tournaments"]:
             return "Tournament not found"
@@ -658,9 +674,12 @@ class TournamentManagerPlugin(BotPlugin):
     @arg_botcmd("role", type=str)
     @arg_botcmd("alias", type=str)
     @tournament_admin_only
-    def add_captain_role(self, msg, alias, role):
+    def add_captain_role(self, msg, alias: str, role: str):
         """
-        [Admin] Link a Discord role as a tournament Captain role
+        [Admin] Link a Discord role as a tournament Captain role.
+        Players that will link their Discord account with their team for this tournament
+        will also be assigned the Captain role.
+        E.g. `!add captain fortnite Fortnite Captain`
         """
         if alias not in self["tournaments"]:
             return "Tournament not found."
@@ -702,7 +721,8 @@ class TournamentManagerPlugin(BotPlugin):
     @tournament_admin_only
     def add_channel(self, msg, alias, channel):
         """
-        [Admin] Link a Discord channel to a tournament
+        [Admin] Link a Discord channel to a tournament.
+        E.g. `!add channel fortnite #fortnite-tournament`
         """
         if alias not in self["tournaments"]:
             return "Tournament not found."
@@ -729,7 +749,8 @@ class TournamentManagerPlugin(BotPlugin):
     @tournament_admin_only
     def remove_channel(self, msg, alias, channel):
         """
-        [Admin] Remove a linked Discord channel from a tournament
+        [Admin] Remove a linked Discord channel from a tournament.
+        E.g. `!remove channel fornite #fortnite-tournament`
         """
         if alias not in self["tournaments"]:
             return "Tournament not found."
@@ -747,16 +768,18 @@ class TournamentManagerPlugin(BotPlugin):
             tournaments.update({alias: tournament.to_dict()})
             return f"Channels successfully removed from the tournament"
 
-    @arg_botcmd("role", type=str)
+    @arg_botcmd("role", type=str, nargs="+")
     @arg_botcmd("alias", type=str)
     @tournament_admin_only
-    def add_role(self, msg, alias, role):
+    def add_role(self, msg, alias: str, role: List[str]):
         """
-        [Admin] Link a Discord admin role to a tournament
+        [Admin] Link a Discord admin role to a tournament.
+        E.g. `!add role fortnite Fortnite Admin`
         """
         if alias not in self["tournaments"]:
             return "Tournament not found."
 
+        role = " ".join(role)
         if not self._bot.find_role(role):
             return f"Role `{role}` not found"
 
@@ -777,14 +800,18 @@ class TournamentManagerPlugin(BotPlugin):
                 f"to the tournament `{tournament.alias}`"
             )
 
-    @arg_botcmd("role", type=str)
+    @arg_botcmd("role", type=str, nargs="+")
     @arg_botcmd("alias", type=str)
     @tournament_admin_only
-    def remove_role(self, msg, alias, role):
-        """ [Admin] Remove a Discord admin role from a tournament """
+    def remove_role(self, msg, alias: str, role: List[str]):
+        """
+        [Admin] Remove a Discord admin role from a tournament.
+        E.g. `!remove role fortnite Fortnite Admin`
+        """
         if alias not in self["tournaments"]:
             return "Tournament not found."
 
+        role = " ".join(role)
         with self.mutable("tournaments") as tournaments:
             tournament = Tournament.from_dict(tournaments[alias])
 
@@ -800,7 +827,10 @@ class TournamentManagerPlugin(BotPlugin):
     @arg_botcmd("alias", type=str)
     @tournament_admin_only
     def reset_team(self, msg: Message, alias: str, team_name: List[str]):
-        """ [Admin] Reset a team """
+        """
+        [Admin] Reset a team information and linked captain.
+        E.g. `!reset team fortnite The Dream Team 99`
+        """
         if alias not in self["tournaments"]:
             return "Tournament not found"
 
@@ -832,7 +862,8 @@ class TournamentManagerPlugin(BotPlugin):
     @tournament_admin_only
     def remove_team(self, msg: Message, alias: str, team_name: List[str]):
         """
-        [Admin] Remove a team from a tournament
+        [Admin] Remove a team from a tournament.
+        E.g. `!remove team fortnite Team Liquid`
         """
         if alias not in self["tournaments"]:
             return "Tournament not found"
@@ -857,7 +888,10 @@ class TournamentManagerPlugin(BotPlugin):
     @arg_botcmd("team_name", type=str, nargs="+")
     @arg_botcmd("alias", type=str)
     def link(self, msg: Message, alias: str, team_name: List[str]):
-        """ Link a Discord account with a team """
+        """
+        Link your Discord account with a team to become the captain of this team.
+        E.g. `!link fortnite Team Liquid`
+        """
         if alias not in self["tournaments"]:
             return "Tournament not found"
 
@@ -898,7 +932,10 @@ class TournamentManagerPlugin(BotPlugin):
 
     @arg_botcmd("team_name", type=str, nargs="+")
     def unlink(self, msg: Message, team_name: List[str]):
-        """ [Linked] Unlink your current team with your Discord account """
+        """
+        [Linked] Unlink your current team with your Discord account.
+        E.g. `!unlink Team SoloMid`
+        """
 
         team_name = " ".join(team_name)
         with self.mutable("tournaments") as tournaments:
@@ -926,7 +963,10 @@ class TournamentManagerPlugin(BotPlugin):
 
     @arg_botcmd("match_name", type=str)
     def join(self, msg: Message, match_name: str):
-        """ [Linked] Join a match """
+        """
+        [Linked] Join a match.
+        E.g. `!join match_1`
+        """
         with self.mutable("tournaments") as tournaments:
             team, tournament = self._find_captain_team(msg.frm.fullname, tournaments)
             if not team:
@@ -953,7 +993,10 @@ class TournamentManagerPlugin(BotPlugin):
 
     @arg_botcmd("alias", type=str)
     def show_matches(self, msg, alias):
-        """ Show the matches of a tournament """
+        """
+        Show the matches of a tournament.
+        E.g. `!show matches fortnite`
+        """
         if alias not in self["tournaments"]:
             return "Tournament not found"
 
@@ -969,7 +1012,10 @@ class TournamentManagerPlugin(BotPlugin):
     @arg_botcmd("alias", type=str)
     @tournament_admin_only
     def show_match_scores(self, msg, alias: str, match_name: str):
-        """ [Admin] Show a tournament match scores """
+        """
+        [Admin] Show a tournament match score submissions.
+        E.g. `!show match scores fortnite match_1`
+        """
         if alias not in self["tournaments"]:
             return "Tournament not found"
 
@@ -996,7 +1042,10 @@ class TournamentManagerPlugin(BotPlugin):
     @arg_botcmd("alias", type=str)
     @tournament_admin_only
     def create_match(self, msg, alias, match_name, password):
-        """ [Admin] Create a tournament match """
+        """
+        [Admin] Create a tournament match.
+        E.g. `!create match fortnite match_1 secretPassword`
+        """
         if alias not in self["tournaments"]:
             return "Tournament not found"
 
@@ -1018,7 +1067,12 @@ class TournamentManagerPlugin(BotPlugin):
     @arg_botcmd("alias", type=str)
     @tournament_admin_only
     def start_match(self, msg, alias: str, match_name: str):
-        """ [Admin] Start a tournament match """
+        """
+        [Admin] Start a tournament match.
+        This will send a notification in the tournament's channels (if exists) and to the
+        linked captains of this tournament that the match is going to start in 30 seconds.
+        E.g. `!start match fortnite match_1`
+        """
         if alias not in self["tournaments"]:
             return "Tournament not found"
 
@@ -1052,7 +1106,11 @@ class TournamentManagerPlugin(BotPlugin):
     @arg_botcmd("alias", type=str)
     @tournament_admin_only
     def end_match(self, msg, alias: str, match_name: str):
-        """ [Admin] End a tournament match """
+        """
+        [Admin] Set a tournament match status as completed. Players won't be able
+        to update or send new score submissions for this match.
+        E.g. `!end match fortnite match_1`
+        """
         if alias not in self["tournaments"]:
             return "Tournament not found"
 
@@ -1069,6 +1127,32 @@ class TournamentManagerPlugin(BotPlugin):
             # Save tournament changes to db
             tournaments.update({alias: tournament.to_dict()})
             return self.send(msg.frm, f"Match `{match_name}` status set to COMPLETED.")
+
+    @arg_botcmd("match_name", type=str)
+    @arg_botcmd("alias", type=str)
+    @tournament_admin_only
+    def reopen_match(self, msg, alias: str, match_name: str):
+        """
+        [Admin] Set a COMPLETED match status to ONGOING, allowing players to re-submit
+        their scores.
+        E.g. !reopen match fortnite match_1
+        """
+        if alias not in self["tournaments"]:
+            return "Tournament not found"
+
+        with self.mutable("tournaments") as tournaments:
+            tournament = Tournament.from_dict(tournaments[alias])
+            match = tournament.find_match_by_name(match_name)
+            if not match:
+                return "Match not found"
+
+            if match.status != MatchStatus.COMPLETED:
+                return f"Can't reopen match with status `{match.status.name}`"
+            match.status = MatchStatus.ONGOING
+
+            # Save tournament changes to db
+            tournaments.update({alias: tournament.to_dict()})
+            return self.send(msg.frm, f"Match `{match_name}` status set to ONGOING.")
 
     """
     Utils
