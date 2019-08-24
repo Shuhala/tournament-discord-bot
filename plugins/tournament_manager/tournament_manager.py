@@ -377,7 +377,7 @@ class TournamentManagerPlugin(BotPlugin):
             "```General Commands```"
             "*Bot available commands. "
             "\nNote: The **[alias]** parameter is the `Tournament Alias` field that can "
-            "be found in the tournaments description. Try `!show tournaments` !*"
+            "be found in the tournaments description. Try `!show tournaments`*"
             "\n\n"
         )
         help_message += "\n".join(
@@ -411,11 +411,136 @@ class TournamentManagerPlugin(BotPlugin):
         self.send(msg.frm, help_message)
 
         if self._is_tournament_admin(msg.frm):
-            help_message = "```Admin Commands```"
-            help_message += "\n\n".join(
+            help_message = "```Admin Commands```\n"
+            help_message += "\n".join(
                 f"- **!{name}**\n    {descr[8:]}" for name, descr in admin_commands
             )
             self.send(msg.frm, help_message)
+
+    @arg_botcmd("role", type=str, nargs="+")
+    @arg_botcmd("alias", type=str)
+    @tournament_admin_only
+    @private_message_only
+    def add_admin_role(self, msg, alias: str, role: List[str]):
+        """
+        [Admin] Link a Discord admin role to a tournament.
+        E.g. `!add admin role fortnite Fortnite Admin`
+        """
+        if alias not in self["tournaments"]:
+            return "Tournament not found."
+
+        role = " ".join(role)
+        if not self._bot.find_role(role):
+            return f"Role `{role}` not found"
+
+        with self.mutable("tournaments") as tournaments:
+            tournament = Tournament.from_dict(tournaments[alias])
+
+            if role in tournament.administrator_roles:
+                return (
+                    f"Role `{role}` is already a tournament administrator role "
+                    f"of `{tournament.alias}`"
+                )
+            tournament.administrator_roles.append(role)
+
+            # Save tournament changes to db
+            tournaments.update({alias: tournament.to_dict()})
+            return (
+                f"Role `{role}` successfully added "
+                f"to the tournament `{tournament.alias}`"
+            )
+
+    @arg_botcmd("role", type=str, nargs="+")
+    @arg_botcmd("alias", type=str)
+    @tournament_admin_only
+    def add_captain_role(self, msg, alias: str, role: List[str]):
+        """
+        [Admin] Link a Discord role as a tournament Captain role.
+        Players that will link their Discord account with their team for this tournament
+        will also be assigned the Captain role.
+        E.g. `!add captain fortnite Fortnite Captain`
+        """
+        if alias not in self["tournaments"]:
+            return "Tournament not found."
+
+        role = " ".join(role)
+        if not self._bot.find_role(role):
+            return f"Role `{role}` not found"
+
+        with self.mutable("tournaments") as tournaments:
+            tournament = Tournament.from_dict(tournaments[alias])
+            tournament.captain_role = role
+
+            # Save tournament changes to db
+            tournaments.update({alias: tournament.to_dict()})
+            return (
+                f"Captain role `{role}` successfully added "
+                f"to the tournament `{tournament.alias}`"
+            )
+
+    @arg_botcmd("channel", type=str)
+    @arg_botcmd("alias", type=str)
+    @tournament_admin_only
+    @private_message_only
+    def add_channel(self, msg, alias, channel):
+        """
+        [Admin] Link a Discord channel to a tournament.
+        E.g. `!add channel fortnite #fortnite-tournament`
+        """
+        if alias not in self["tournaments"]:
+            return "Tournament not found."
+
+        if not self.query_room(channel):
+            return "Invalid channel name"
+
+        with self.mutable("tournaments") as tournaments:
+            tournament = Tournament.from_dict(tournaments[alias])
+
+            if channel in tournament.channels:
+                return (
+                    f"Channel `{channel}` is already set for the tournament "
+                    f"`{tournament.alias}`"
+                )
+            tournament.channels.append(channel)
+
+            # Save tournament changes to db
+            tournaments.update({alias: tournament.to_dict()})
+            return f"Channels successfully added to the tournament"
+
+    @arg_botcmd("tournament_id", type=int)
+    @arg_botcmd("alias", type=str, admin_only=True)
+    @tournament_admin_only
+    @private_message_only
+    def add_tournament(self, msg: Message, alias, tournament_id: int):
+        """
+        [Admin] `!add tournament fortnite 123456789`
+        """
+        with self.mutable("tournaments") as tournaments:
+            if alias in tournaments:
+                return "Tournament with this alias already exists."
+
+            tournament = Tournament(
+                id=tournament_id,
+                alias=alias,
+                url=f"https://www.toornament.com/en_US/tournaments/"
+                f"{tournament_id}/information",
+            )
+
+            # Toornament info
+            toornament_info = self.toornament_api_client.get_tournament(tournament_id)
+            if not toornament_info:
+                return "Tournament not found."
+            tournament.info = ToornamentInfo.from_dict(toornament_info)
+
+            # Toornament participants
+            toornament_participants = self.toornament_api_client.get_participants(
+                tournament_id
+            )
+            tournament.teams = [Team.from_dict(p) for p in toornament_participants]
+
+            # Add to tournaments db
+            tournaments.update({alias: tournament.to_dict()})
+            self.send(msg.frm, f"Tournament `{tournament.info.name}` successfully added")
 
     def callback_attachment(self, msg: Message, discord_msg: discord.Message):
         """ Send screenshots in private message to bot """
@@ -513,693 +638,32 @@ class TournamentManagerPlugin(BotPlugin):
                 # Save tournament changes to db
                 tournaments.update({tournament.alias: tournament.to_dict()})
 
-    @arg_botcmd("alias", type=str)
-    def show_tournament(self, msg, alias):
-        """
-        Show a tournament.
-        E.g. `!show tournament fortnite`
-        """
-        if alias not in self["tournaments"]:
-            return "Tournament not found."
-        tournament = Tournament.from_dict(self["tournaments"][alias])
-        self._show_tournament(msg, tournament)
-
-    @botcmd
-    def show_tournaments(self, msg, args):
-        """ Show available tournaments. E.g. `!show tournaments` """
-        if self["tournaments"]:
-            for tournament in self["tournaments"].values():
-                tournament = Tournament.from_dict(tournament)
-                self._show_tournament(msg, tournament)
-        else:
-            return "No tournaments to show."
-
-    @botcmd
-    @private_message_only
-    def show_status(self, msg, args):
-        """ Show your current status. """
-        team, tournament = self._find_captain_team(msg.frm.fullname, self["tournaments"])
-        if not team:
-            return "You are not the captain of a team."
-
-        self.send_card(
-            title=f"{tournament.alias} ({tournament.info.name})",
-            summary=f"To unregister, type:\n!unlink {team.name}",
-            in_reply_to=msg,
-            **team.show_card(),
-        )
-
-    @arg_botcmd("alias", type=str)
-    @tournament_channel_only
-    def show_teams(self, msg: Message, alias):
-        """
-        Show current teams linked on Discord.
-        E.g. `!show teams fortnite`
-        """
-        if alias not in self["tournaments"]:
-            return "Tournament doesn't exists"
-
-        tournament = Tournament.from_dict(self["tournaments"][alias])
-        participants = sorted(tournament.teams, key=lambda k: getattr(k, "name"))
-        participants = [p for p in participants if p.captain is not None]
-        if len(participants) == 0:
-            return "No team registered for this tournament"
-
-        count = 1
-        participants_chunks = chunks(participants, 100)
-        for i, chunk in enumerate(participants_chunks):
-            team_names = ""
-            for team in chunk:
-                team_names += f"{count}. {team.name}\n"
-                count += 1
-
-            self.send_card(
-                title=f"{tournament.alias} Registered Participants"
-                f"({i + 1}/{len(participants_chunks)})",
-                body=(
-                    f"Number of teams: "
-                    f"{len(tournament.teams)} \n"
-                    f"Number of registrations: "
-                    f"{tournament.count_linked_teams()}\n\n"
-                    f"{team_names}"
-                ),
-                color="green",
-                in_reply_to=msg,
-            )
-
-    @arg_botcmd("alias", type=str)
-    @tournament_channel_only
-    def show_missing_teams(self, msg: Message, alias):
-        """
-        Show teams not linked on Discord.
-        E.g. `!show missing teams fortnite`
-        """
-        if alias not in self["tournaments"]:
-            return "Tournament doesn't exists"
-
-        tournament = Tournament.from_dict(self["tournaments"][alias])
-        participants = sorted(tournament.teams, key=lambda k: getattr(k, "name"))
-        participants = [p for p in participants if p.captain is None]
-        if len(participants) == 0:
-            return "Every team registered for this tournament"
-
-        missing_participants_count = (
-            len(tournament.teams) - tournament.count_linked_teams()
-        )
-        count = 1
-        participants_chunks = chunks(participants, 100)
-        for i, chunk in enumerate(participants_chunks):
-            team_names = ""
-            for team in chunk:
-                team_names += f"{count}. {team.name}\n"
-                count += 1
-
-            self.send_card(
-                title=f"{tournament.alias} Missing Registrations "
-                f"({i + 1}/{len(participants_chunks)})",
-                body=(
-                    f"Number of teams: "
-                    f"{len(tournament.teams)} \n"
-                    f"Number of missing registrations: "
-                    f"{missing_participants_count}\n\n"
-                    f"{team_names}"
-                ),
-                color="green",
-                in_reply_to=msg,
-            )
-
-    """
-    Tournament Management
-    """
-
-    @arg_botcmd("tournament_id", type=int)
-    @arg_botcmd("alias", type=str, admin_only=True)
-    @tournament_admin_only
-    @private_message_only
-    def add_tournament(self, msg: Message, alias, tournament_id: int):
-        """
-        [Admin] `!add tournament fortnite 123456789`
-        """
-        with self.mutable("tournaments") as tournaments:
-            if alias in tournaments:
-                return "Tournament with this alias already exists."
-
-            tournament = Tournament(
-                id=tournament_id,
-                alias=alias,
-                url=f"https://www.toornament.com/en_US/tournaments/"
-                f"{tournament_id}/information",
-            )
-
-            # Toornament info
-            toornament_info = self.toornament_api_client.get_tournament(tournament_id)
-            if not toornament_info:
-                return "Tournament not found."
-            tournament.info = ToornamentInfo.from_dict(toornament_info)
-
-            # Toornament participants
-            toornament_participants = self.toornament_api_client.get_participants(
-                tournament_id
-            )
-            tournament.teams = [Team.from_dict(p) for p in toornament_participants]
-
-            # Add to tournaments db
-            tournaments.update({alias: tournament.to_dict()})
-            self.send(msg.frm, f"Tournament `{tournament.info.name}` successfully added")
-
-    @arg_botcmd("alias", type=str, admin_only=True)
-    @tournament_admin_only
-    @private_message_only
-    def remove_tournament(self, msg, alias):
-        """
-        [Admin] Associate a Discord role to a tournament.
-        E.g. `!remove tournament fortnite`
-        """
-        if alias not in self["tournaments"]:
-            return "Tournament not found."
-
-        with self.mutable("tournaments") as tournaments:
-            tournaments.pop(alias)
-            return f"Tournament successfully removed."
-
-    @arg_botcmd("alias", type=str)
-    @tournament_admin_only
-    @private_message_only
-    def refresh_tournament(self, msg: Message, alias: str):
-        """
-        [Admin] Refresh a tournament's information.
-        E.g. `!refresh tournament fortnite`
-        """
-        if alias not in self["tournaments"]:
-            return "Tournament not found"
-
-        with self.mutable("tournaments") as tournaments:
-            tournament = Tournament.from_dict(tournaments[alias])
-
-            # update data fetched on Toornament
-            info = self.toornament_api_client.get_tournament(tournament.id)
-            if not info:
-                return "Tournament not found on Toornament."
-
-            # Override current tournament info
-            tournament.info = ToornamentInfo.from_dict(info)
-
-            # update participants list
-            participants = self.toornament_api_client.get_participants(tournament.id)
-            for participant in participants:
-                team = tournament.find_team_by_id(participant["id"])
-                if team:
-                    # Update participant name and lineup
-                    team.name = participant["name"]
-                    team.lineup = [Player(**pl) for pl in participant.get("lineup", [])]
-                    team.checked_in = participant.get("checked_in")
-                else:
-                    # Add new participant
-                    tournament.teams.append(Team.from_dict(participant))
-
-            # Save tournament changes to db
-            tournaments.update({alias: tournament.to_dict()})
-            return f"Tournament {tournament.alias} successfully refreshed."
-
-    @arg_botcmd("role", type=str, nargs="+")
-    @arg_botcmd("alias", type=str)
-    @tournament_admin_only
-    def add_captain_role(self, msg, alias: str, role: List[str]):
-        """
-        [Admin] Link a Discord role as a tournament Captain role.
-        Players that will link their Discord account with their team for this tournament
-        will also be assigned the Captain role.
-        E.g. `!add captain fortnite Fortnite Captain`
-        """
-        if alias not in self["tournaments"]:
-            return "Tournament not found."
-
-        role = " ".join(role)
-        if not self._bot.find_role(role):
-            return f"Role `{role}` not found"
-
-        with self.mutable("tournaments") as tournaments:
-            tournament = Tournament.from_dict(tournaments[alias])
-            tournament.captain_role = role
-
-            # Save tournament changes to db
-            tournaments.update({alias: tournament.to_dict()})
-            return (
-                f"Captain role `{role}` successfully added "
-                f"to the tournament `{tournament.alias}`"
-            )
-
-    @arg_botcmd("alias", type=str)
-    @tournament_admin_only
-    @private_message_only
-    def remove_captain_role(self, msg, alias):
-        """ [Admin] Remove a tournament Discord Captain Role """
-        if alias not in self["tournaments"]:
-            return "Tournament not found."
-
-        with self.mutable("tournaments") as tournaments:
-            tournament = Tournament.from_dict(tournaments[alias])
-            tournament.captain_role = None
-
-            # Save tournament changes to db
-            tournaments.update({alias: tournament.to_dict()})
-            return (
-                f"Captain Role successfully removed for "
-                f"the tournament `{tournament.alias}`"
-            )
-
-    @arg_botcmd("channel", type=str)
-    @arg_botcmd("alias", type=str)
-    @tournament_admin_only
-    @private_message_only
-    def add_channel(self, msg, alias, channel):
-        """
-        [Admin] Link a Discord channel to a tournament.
-        E.g. `!add channel fortnite #fortnite-tournament`
-        """
-        if alias not in self["tournaments"]:
-            return "Tournament not found."
-
-        if not self.query_room(channel):
-            return "Invalid channel name"
-
-        with self.mutable("tournaments") as tournaments:
-            tournament = Tournament.from_dict(tournaments[alias])
-
-            if channel in tournament.channels:
-                return (
-                    f"Channel `{channel}` is already set for the tournament "
-                    f"`{tournament.alias}`"
-                )
-            tournament.channels.append(channel)
-
-            # Save tournament changes to db
-            tournaments.update({alias: tournament.to_dict()})
-            return f"Channels successfully added to the tournament"
-
-    @arg_botcmd("channel", type=str)
-    @arg_botcmd("alias", type=str)
-    @tournament_admin_only
-    @private_message_only
-    def remove_channel(self, msg, alias, channel):
-        """
-        [Admin] Remove a linked Discord channel from a tournament.
-        E.g. !remove channel fornite #fortnite-tournament
-        """
-        if alias not in self["tournaments"]:
-            return "Tournament not found."
-
-        with self.mutable("tournaments") as tournaments:
-            tournament = Tournament.from_dict(tournaments[alias])
-            if channel not in tournament.channels:
-                return (
-                    f"Channel `{channel}` doesn't exists for the tournament "
-                    f"`{tournament.alias}`"
-                )
-            tournament.channels.remove(channel)
-
-            # Save tournament changes to db
-            tournaments.update({alias: tournament.to_dict()})
-            return f"Channels successfully removed from the tournament"
-
-    @arg_botcmd("role", type=str, nargs="+")
-    @arg_botcmd("alias", type=str)
-    @tournament_admin_only
-    @private_message_only
-    def add_admin_role(self, msg, alias: str, role: List[str]):
-        """
-        [Admin] Link a Discord admin role to a tournament.
-        E.g. `!add admin role fortnite Fortnite Admin`
-        """
-        if alias not in self["tournaments"]:
-            return "Tournament not found."
-
-        role = " ".join(role)
-        if not self._bot.find_role(role):
-            return f"Role `{role}` not found"
-
-        with self.mutable("tournaments") as tournaments:
-            tournament = Tournament.from_dict(tournaments[alias])
-
-            if role in tournament.administrator_roles:
-                return (
-                    f"Role `{role}` is already a tournament administrator role "
-                    f"of `{tournament.alias}`"
-                )
-            tournament.administrator_roles.append(role)
-
-            # Save tournament changes to db
-            tournaments.update({alias: tournament.to_dict()})
-            return (
-                f"Role `{role}` successfully added "
-                f"to the tournament `{tournament.alias}`"
-            )
-
-    @arg_botcmd("role", type=str, nargs="+")
-    @arg_botcmd("alias", type=str)
-    @tournament_admin_only
-    @private_message_only
-    def remove_admin_role(self, msg, alias: str, role: List[str]):
-        """
-        [Admin] Remove a Discord admin role from a tournament.
-        E.g. `!remove admin role fortnite Fortnite Admin`
-        """
-        if alias not in self["tournaments"]:
-            return "Tournament not found."
-
-        role = " ".join(role)
-        with self.mutable("tournaments") as tournaments:
-            tournament = Tournament.from_dict(tournaments[alias])
-
-            if role not in tournament.administrator_roles:
-                return f"Role `{role.name}` is not a role of `{tournament.alias}`"
-            tournament.administrator_roles.remove(role.name)
-
-            # Save tournament changes to db
-            tournaments.update({alias: tournament.to_dict()})
-            return f"Roles successfully removed from the tournament `{tournament.alias}`"
-
-    @arg_botcmd("team_id", type=int)
-    @arg_botcmd("alias", type=str)
-    @tournament_admin_only
-    @private_message_only
-    def reset_team(self, msg: Message, alias: str, team_id: int):
-        """
-        [Admin] Reset a team information and linked captain.
-        E.g. `!reset team fortnite 123456789`
-        """
-        if alias not in self["tournaments"]:
-            return "Tournament not found"
-
-        with self.mutable("tournaments") as tournaments:
-            tournament = Tournament.from_dict(tournaments[alias])
-            team = tournament.find_team_by_id(team_id)
-            if not team:
-                return (
-                    f"Team `{team_id}` not found in the tournament {tournament.alias}"
-                    f". Try to refresh the tournament instead."
-                )
-
-            participant = self.toornament_api_client.get_participant(
-                tournament.id, team.id
-            )
-            if not participant:
-                return "Could not retrieve participant's info"
-
-            if team.captain:
-                self._remove_discord_team_captain(
-                    self.build_identifier(team.captain), tournament.captain_role
-                )
-            team.captain = None
-            team.lineup = [Player.from_dict(pl) for pl in participant["lineup"]]
-            team.custom_fields = participant["custom_fields"]
-            team.checked_in = participant["checked_in"]
-
-            # Save tournament changes to db
-            tournaments.update({alias: tournament.to_dict()})
-            return f"Team {team.name} successfully updated."
-
-    @arg_botcmd("discord_user", type=str)
-    @arg_botcmd("team_id", type=int)
-    @arg_botcmd("alias", type=str)
-    @tournament_admin_only
-    @private_message_only
-    def link_team_captain(self, msg, alias: str, discord_user: str, team_id: int):
-        """
-        [Admin] Set a discord user as a team linked captain.
-        E.g. `!link team captain fortnite 123456789 user#1234`
-        """
-        if alias not in self["tournaments"]:
-            return "Tournament not found"
-
-        try:
-            user = self.build_identifier(discord_user)
-        except Exception:
-            return f"User `{discord_user}` not found."
-
-        if self._find_captain_team(discord_user, self["tournaments"])[0]:
-            return f"User `{discord_user}` is already the captain of a team."
-
-        with self.mutable("tournaments") as tournaments:
-            tournament = Tournament.from_dict(tournaments[alias])
-            team = tournament.find_team_by_id(team_id)
-            if not team:
-                return (
-                    f"Team `{team_id}` not found in the tournament `{tournament.alias}`"
-                )
-
-            if team.captain:
-                self._remove_discord_team_captain(
-                    self.build_identifier(team.captain), tournament.captain_role
-                )
-
-            team.captain = discord_user
-            self._add_discord_team_captain(user, team.name, tournament.captain_role)
-
-            # Save tournament changes to db
-            tournaments.update({alias: tournament.to_dict()})
-            return f"Team `{team.name}` captain successfully linked to `{discord_user}`."
-
-    @arg_botcmd("team_name", type=str, nargs="+")
-    @arg_botcmd("alias", type=str)
-    @tournament_channel_only
-    def show_team(self, msg: Message, alias: str, team_name: List[str]):
-        """
-        Show a team information.
-        E.g. `!show team fortnite Team Liquid`
-        """
-        if alias not in self["tournaments"]:
-            return "Tournament not found"
-
-        team_name = " ".join(team_name)
-
-        with self.mutable("tournaments") as tournaments:
-            tournament = Tournament.from_dict(tournaments[alias])
-            team = tournament.find_team_by_name(team_name)
-            if not team:
-                return (
-                    f"Team `{team_name}` not found in the tournament `{tournament.alias}`"
-                )
-
-            self.send_card(
-                in_reply_to=msg,
-                title=f"{team.name} @ {tournament.info.name}",
-                **team.show_card(),
-            )
-
-    @arg_botcmd("team_id", type=int)
-    @arg_botcmd("alias", type=str)
-    @tournament_admin_only
-    @private_message_only
-    def remove_team(self, msg: Message, alias: str, team_id: int):
-        """
-        [Admin] Remove a team from a tournament.
-        E.g. `!remove team fortnite 123456789`
-        """
-        if alias not in self["tournaments"]:
-            return "Tournament not found"
-
-        with self.mutable("tournaments") as tournaments:
-            tournament = Tournament.from_dict(tournaments[alias])
-            team = tournament.find_team_by_id(team_id)
-            if not team:
-                return f"Team `{team_id}` not found in the tournament {tournament.alias}"
-
-            if team.captain:
-                self._remove_discord_team_captain(
-                    self.build_identifier(team.captain), tournament.captain_role
-                )
-            tournament.teams.remove(team)
-
-            # Save tournament changes to db
-            tournaments.update({alias: tournament.to_dict()})
-            return f"Team {team.name} successfully removed."
-
-    """
-    Registration Commands
-    """
-
-    @arg_botcmd("team_name", type=str, nargs="+")
-    @arg_botcmd("alias", type=str)
-    @tournament_channel_only
-    def link(self, msg: Message, alias: str, team_name: List[str]):
-        """
-        Link your Discord account with a team to become the captain of this team.
-        E.g. `!link fortnite Team Liquid`
-        """
-        if alias not in self["tournaments"]:
-            return "Tournament not found"
-
-        team_name = " ".join(team_name)
-        with self.mutable("tournaments") as tournaments:
-            team, tournament = self._find_captain_team(msg.frm.fullname, tournaments)
-            if team:
-                if team.name == team_name:
-                    return "You are already this team"
-                return (
-                    "You can't be the captain of more than one team.\n"
-                    f"You are currently the captain of the team `{team.name}` for the "
-                    f"tournament {tournament.name}"
-                )
-
-            tournament = Tournament.from_dict(tournaments[alias])
-            team = tournament.find_team_by_name(team_name)
-            if not team:
-                return (
-                    f"Team `{team_name}` not found in the tournament `{tournament.alias}`"
-                )
-
-            if team.captain is not None:
-                return (
-                    f"Team `{team_name}` is already registered with the "
-                    f"captain `{team.captain}`"
-                )
-
-            team.captain = msg.frm.fullname
-
-            # Save tournament changes to db
-            tournaments.update({alias: tournament.to_dict()})
-
-            self._add_discord_team_captain(msg.frm, team_name, tournament.captain_role)
-
-            return (
-                f"You are now the captain of the team `{team_name}` and "
-                f"successfully checked-in for this tournament!"
-            )
-
-    @arg_botcmd("team_name", type=str, nargs="+")
-    @tournament_channel_only
-    def unlink(self, msg: Message, team_name: List[str]):
-        """
-        [Linked] Unlink your current team with your Discord account.
-        E.g. `!unlink Team SoloMid`
-        """
-
-        team_name = " ".join(team_name)
-        with self.mutable("tournaments") as tournaments:
-            team, tournament = self._find_captain_team(msg.frm.fullname, tournaments)
-            if not team:
-                return "You are not the captain of a team."
-
-            if team.name != team_name:
-                return (
-                    f"Your linked team name `{team.name}` is different from "
-                    f"your entry `{team_name}`. To confirm your unregistration, please "
-                    f"type the right team name."
-                )
-
-            team.captain = None
-
-            # Save tournament changes to db
-            tournaments.update({tournament.alias: tournament.to_dict()})
-            self._remove_discord_team_captain(msg.frm, tournament.captain_role)
-            return f"You are no longer the captain of the team `{team_name}`."
-
-    """
-    Matches Commands
-    """
-
+    @arg_botcmd("password", type=str)
     @arg_botcmd("match_name", type=str)
-    @tournament_channel_only
-    def join(self, msg: Message, match_name: str):
+    @arg_botcmd("alias", type=str)
+    @tournament_admin_only
+    @private_message_only
+    def create_match(self, msg, alias, match_name, password):
         """
-        [Linked] Join a match.
-        E.g. `!join match_1`
+        [Admin] Create a tournament match.
+        E.g. `!create match fortnite match_1 secretPassword`
         """
-        with self.mutable("tournaments") as tournaments:
-            team, tournament = self._find_captain_team(msg.frm.fullname, tournaments)
-            if not team:
-                return "You are not a team captain."
+        if alias not in self["tournaments"]:
+            return "Tournament not found"
 
+        with self.mutable("tournaments") as tournaments:
+            tournament = Tournament.from_dict(tournaments[alias])
             match = tournament.find_match_by_name(match_name)
-            if not match:
-                return "Match not found"
+            if match:
+                return "Match name already exists"
 
-            if match.find_team_by_name(team.name):
-                return f"Team `{team.name}` is already ready for this match"
-
-            if match.status != MatchStatus.PENDING:
-                return f"Can't join match with status {match.status.name}"
-
-            match.teams_ready.append(team)
+            match = Match(name=match_name, created_by=msg.frm.fullname, password=password)
+            tournament.matches.append(match)
 
             # Save tournament changes to db
-            tournaments.update({tournament.alias: tournament.to_dict()})
-            self.send(
-                msg.frm, f"Team `{team.name}` is now ready for the match {match.name}!"
-            )
+            tournaments.update({alias: tournament.to_dict()})
+            self.send(msg.frm, f"Match `{match_name}` successfully created.")
             self._show_match(msg, tournament, match, public=False)
-
-    @arg_botcmd("alias", type=str)
-    @private_message_only
-    def show_matches(self, msg, alias):
-        """
-        Show the matches of a tournament.
-        E.g. `!show matches fortnite`
-        """
-        if alias not in self["tournaments"]:
-            return "Tournament not found"
-
-        tournament = Tournament.from_dict(self["tournaments"][alias])
-        self.send_card(
-            title=tournament.alias,
-            fields=(*((str(match.name), str(match)) for match in tournament.matches),),
-            in_reply_to=msg,
-        )
-
-    @botcmd
-    @private_message_only
-    def show_score_history(self, msg, *args):
-        """
-        [Linked] Show your linked team match score history.
-        E.g. `!show score history`
-        """
-        team, tournament = self._find_captain_team(msg.frm.fullname, self["tournaments"])
-
-        if not team:
-            return "You are not linked to a team."
-
-        self.send_card(
-            title=f"{team.name} @ {tournament.alias} Score Submissions",
-            fields=(
-                (str(score.match_name), str(score)) for score in team.score_submissions
-            ),
-            in_reply_to=msg,
-            color="grey",
-        )
-
-    @arg_botcmd("match_name", type=str)
-    @arg_botcmd("alias", type=str)
-    @tournament_admin_only
-    @private_message_only
-    def show_match_scores(self, msg, alias: str, match_name: str):
-        """
-        [Admin] Show a tournament match score submissions.
-        E.g. `!show match scores fortnite match_1`
-        """
-        if alias not in self["tournaments"]:
-            return "Tournament not found"
-
-        tournament = Tournament.from_dict(self["tournaments"][alias])
-        match = tournament.find_match_by_name(match_name)
-        if not match:
-            return f"Match `{match_name}` not found."
-
-        match_scores = tournament.get_match_scores(match_name)
-        if not match_scores:
-            return "No score submissions found for this match."
-
-        match_scores = sorted(match_scores, key=lambda k: getattr(k, "team_name"))
-        match_scores_chunk = chunks(match_scores, 75)
-
-        for i, chunk in enumerate(match_scores_chunk):
-            self.send_card(
-                title=f"{match.name} @ {tournament.alias} Score Submissions "
-                f"({i + 1}/{len(match_scores_chunk)})",
-                fields=((str(score.team_name), str(score)) for score in chunk),
-                in_reply_to=msg,
-                color="white",
-            )
 
     @arg_botcmd("match_name", type=str)
     @arg_botcmd("alias", type=str)
@@ -1255,15 +719,16 @@ class TournamentManagerPlugin(BotPlugin):
         finally:
             os.remove(path)
 
-    @arg_botcmd("password", type=str)
+    @arg_botcmd("--force", "-f", action="store_true")
     @arg_botcmd("match_name", type=str)
     @arg_botcmd("alias", type=str)
     @tournament_admin_only
-    @private_message_only
-    def create_match(self, msg, alias, match_name, password):
+    def end_match(self, msg, alias: str, match_name: str, force: bool):
         """
-        [Admin] Create a tournament match.
-        E.g. `!create match fortnite match_1 secretPassword`
+        [Admin] Set a tournament match status as completed. Players won't be able
+        to update or send new score submissions for this match.
+        E.g. `!end match fortnite match_1` or `!end match fortnite match_1 --force` to
+        force to end the match what ever the match status is.
         """
         if alias not in self["tournaments"]:
             return "Tournament not found"
@@ -1271,16 +736,565 @@ class TournamentManagerPlugin(BotPlugin):
         with self.mutable("tournaments") as tournaments:
             tournament = Tournament.from_dict(tournaments[alias])
             match = tournament.find_match_by_name(match_name)
-            if match:
-                return "Match name already exists"
+            if not match:
+                return "Match not found"
+            if match.status != MatchStatus.ONGOING and not force:
+                return f"Can't end match with status `{match.status.name}`"
 
-            match = Match(name=match_name, created_by=msg.frm.fullname, password=password)
-            tournament.matches.append(match)
+            match.status = MatchStatus.COMPLETED
 
             # Save tournament changes to db
             tournaments.update({alias: tournament.to_dict()})
-            self.send(msg.frm, f"Match `{match_name}` successfully created.")
+            return self.send(msg.frm, f"Match `{match_name}` status set to COMPLETED.")
+
+    @arg_botcmd("match_name", type=str)
+    @tournament_channel_only
+    def join(self, msg: Message, match_name: str):
+        """
+        [Linked] Join a match.
+        E.g. `!join match_1`
+        """
+        with self.mutable("tournaments") as tournaments:
+            team, tournament = self._find_captain_team(msg.frm.fullname, tournaments)
+            if not team:
+                return "You are not a team captain."
+
+            match = tournament.find_match_by_name(match_name)
+            if not match:
+                return "Match not found"
+
+            if match.find_team_by_name(team.name):
+                return f"Team `{team.name}` is already ready for this match"
+
+            if match.status != MatchStatus.PENDING:
+                return f"Can't join match with status {match.status.name}"
+
+            match.teams_ready.append(team)
+
+            # Save tournament changes to db
+            tournaments.update({tournament.alias: tournament.to_dict()})
+            self.send(
+                msg.frm, f"Team `{team.name}` is now ready for the match {match.name}!"
+            )
             self._show_match(msg, tournament, match, public=False)
+
+    @arg_botcmd("team_name", type=str, nargs="+")
+    @arg_botcmd("alias", type=str)
+    @tournament_channel_only
+    def link(self, msg: Message, alias: str, team_name: List[str]):
+        """
+        Link your Discord account with a team to become the captain of this team.
+        E.g. `!link fortnite Team Liquid`
+        """
+        if alias not in self["tournaments"]:
+            return "Tournament not found"
+
+        team_name = " ".join(team_name)
+        with self.mutable("tournaments") as tournaments:
+            team, tournament = self._find_captain_team(msg.frm.fullname, tournaments)
+            if team:
+                if team.name == team_name:
+                    return "You are already this team"
+                return (
+                    "You can't be the captain of more than one team.\n"
+                    f"You are currently the captain of the team `{team.name}` for the "
+                    f"tournament {tournament.name}"
+                )
+
+            tournament = Tournament.from_dict(tournaments[alias])
+            team = tournament.find_team_by_name(team_name)
+            if not team:
+                return (
+                    f"Team `{team_name}` not found in the tournament `{tournament.alias}`"
+                )
+
+            if team.captain is not None:
+                return (
+                    f"Team `{team_name}` is already registered with the "
+                    f"captain `{team.captain}`"
+                )
+
+            team.captain = msg.frm.fullname
+
+            # Save tournament changes to db
+            tournaments.update({alias: tournament.to_dict()})
+
+            self._add_discord_team_captain(msg.frm, team_name, tournament.captain_role)
+
+            return (
+                f"You are now the captain of the team `{team_name}` and "
+                f"successfully checked-in for this tournament!"
+            )
+
+    @arg_botcmd("discord_user", type=str)
+    @arg_botcmd("team_id", type=int)
+    @arg_botcmd("alias", type=str)
+    @tournament_admin_only
+    @private_message_only
+    def link_team_captain(self, msg, alias: str, discord_user: str, team_id: int):
+        """
+        [Admin] Set a discord user as a team linked captain.
+        E.g. `!link team captain fortnite 123456789 user#1234`
+        """
+        if alias not in self["tournaments"]:
+            return "Tournament not found"
+
+        try:
+            user = self.build_identifier(discord_user)
+        except Exception:
+            return f"User `{discord_user}` not found."
+
+        if self._find_captain_team(discord_user, self["tournaments"])[0]:
+            return f"User `{discord_user}` is already the captain of a team."
+
+        with self.mutable("tournaments") as tournaments:
+            tournament = Tournament.from_dict(tournaments[alias])
+            team = tournament.find_team_by_id(team_id)
+            if not team:
+                return (
+                    f"Team `{team_id}` not found in the tournament `{tournament.alias}`"
+                )
+
+            if team.captain:
+                self._remove_discord_team_captain(
+                    self.build_identifier(team.captain), tournament.captain_role
+                )
+
+            team.captain = discord_user
+            self._add_discord_team_captain(user, team.name, tournament.captain_role)
+
+            # Save tournament changes to db
+            tournaments.update({alias: tournament.to_dict()})
+            return f"Team `{team.name}` captain successfully linked to `{discord_user}`."
+
+    @arg_botcmd("alias", type=str)
+    @tournament_admin_only
+    @private_message_only
+    def refresh_tournament(self, msg: Message, alias: str):
+        """
+        [Admin] Refresh a tournament's information.
+        E.g. `!refresh tournament fortnite`
+        """
+        if alias not in self["tournaments"]:
+            return "Tournament not found"
+
+        with self.mutable("tournaments") as tournaments:
+            tournament = Tournament.from_dict(tournaments[alias])
+
+            # update data fetched on Toornament
+            info = self.toornament_api_client.get_tournament(tournament.id)
+            if not info:
+                return "Tournament not found on Toornament."
+
+            # Override current tournament info
+            tournament.info = ToornamentInfo.from_dict(info)
+
+            # update participants list
+            participants = self.toornament_api_client.get_participants(tournament.id)
+            for participant in participants:
+                team = tournament.find_team_by_id(participant["id"])
+                if team:
+                    # Update participant name and lineup
+                    team.name = participant["name"]
+                    team.lineup = [Player(**pl) for pl in participant.get("lineup", [])]
+                    team.checked_in = participant.get("checked_in")
+                else:
+                    # Add new participant
+                    tournament.teams.append(Team.from_dict(participant))
+
+            # Save tournament changes to db
+            tournaments.update({alias: tournament.to_dict()})
+            return f"Tournament {tournament.alias} successfully refreshed."
+
+    @arg_botcmd("role", type=str, nargs="+")
+    @arg_botcmd("alias", type=str)
+    @tournament_admin_only
+    @private_message_only
+    def remove_admin_role(self, msg, alias: str, role: List[str]):
+        """
+        [Admin] Remove a Discord admin role from a tournament.
+        E.g. `!remove admin role fortnite Fortnite Admin`
+        """
+        if alias not in self["tournaments"]:
+            return "Tournament not found."
+
+        role = " ".join(role)
+        with self.mutable("tournaments") as tournaments:
+            tournament = Tournament.from_dict(tournaments[alias])
+
+            if role not in tournament.administrator_roles:
+                return f"Role `{role.name}` is not a role of `{tournament.alias}`"
+            tournament.administrator_roles.remove(role.name)
+
+            # Save tournament changes to db
+            tournaments.update({alias: tournament.to_dict()})
+            return f"Roles successfully removed from the tournament `{tournament.alias}`"
+
+    @arg_botcmd("alias", type=str)
+    @tournament_admin_only
+    @private_message_only
+    def remove_captain_role(self, msg, alias):
+        """ [Admin] Remove a tournament Discord Captain Role """
+        if alias not in self["tournaments"]:
+            return "Tournament not found."
+
+        with self.mutable("tournaments") as tournaments:
+            tournament = Tournament.from_dict(tournaments[alias])
+            tournament.captain_role = None
+
+            # Save tournament changes to db
+            tournaments.update({alias: tournament.to_dict()})
+            return (
+                f"Captain Role successfully removed for "
+                f"the tournament `{tournament.alias}`"
+            )
+
+    @arg_botcmd("channel", type=str)
+    @arg_botcmd("alias", type=str)
+    @tournament_admin_only
+    @private_message_only
+    def remove_channel(self, msg, alias, channel):
+        """
+        [Admin] Remove a linked Discord channel from a tournament.
+        E.g. !remove channel fornite #fortnite-tournament
+        """
+        if alias not in self["tournaments"]:
+            return "Tournament not found."
+
+        with self.mutable("tournaments") as tournaments:
+            tournament = Tournament.from_dict(tournaments[alias])
+            if channel not in tournament.channels:
+                return (
+                    f"Channel `{channel}` doesn't exists for the tournament "
+                    f"`{tournament.alias}`"
+                )
+            tournament.channels.remove(channel)
+
+            # Save tournament changes to db
+            tournaments.update({alias: tournament.to_dict()})
+            return f"Channels successfully removed from the tournament"
+
+    @arg_botcmd("team_id", type=int)
+    @arg_botcmd("alias", type=str)
+    @tournament_admin_only
+    @private_message_only
+    def remove_team(self, msg: Message, alias: str, team_id: int):
+        """
+        [Admin] Remove a team from a tournament.
+        E.g. `!remove team fortnite 123456789`
+        """
+        if alias not in self["tournaments"]:
+            return "Tournament not found"
+
+        with self.mutable("tournaments") as tournaments:
+            tournament = Tournament.from_dict(tournaments[alias])
+            team = tournament.find_team_by_id(team_id)
+            if not team:
+                return f"Team `{team_id}` not found in the tournament {tournament.alias}"
+
+            if team.captain:
+                self._remove_discord_team_captain(
+                    self.build_identifier(team.captain), tournament.captain_role
+                )
+            tournament.teams.remove(team)
+
+            # Save tournament changes to db
+            tournaments.update({alias: tournament.to_dict()})
+            return f"Team {team.name} successfully removed."
+
+    @arg_botcmd("alias", type=str, admin_only=True)
+    @tournament_admin_only
+    @private_message_only
+    def remove_tournament(self, msg, alias):
+        """
+        [Admin] Associate a Discord role to a tournament.
+        E.g. `!remove tournament fortnite`
+        """
+        if alias not in self["tournaments"]:
+            return "Tournament not found."
+
+        with self.mutable("tournaments") as tournaments:
+            tournaments.pop(alias)
+            return f"Tournament successfully removed."
+
+    @arg_botcmd("match_name", type=str)
+    @arg_botcmd("alias", type=str)
+    @tournament_admin_only
+    def reopen_match(self, msg, alias: str, match_name: str):
+        """
+        [Admin] Set a COMPLETED match status to ONGOING, allowing players to re-submit
+        their scores.
+        E.g. !reopen match fortnite match_1
+        """
+        if alias not in self["tournaments"]:
+            return "Tournament not found"
+
+        with self.mutable("tournaments") as tournaments:
+            tournament = Tournament.from_dict(tournaments[alias])
+            match = tournament.find_match_by_name(match_name)
+            if not match:
+                return "Match not found"
+
+            if match.status != MatchStatus.COMPLETED:
+                return f"Can't reopen match with status `{match.status.name}`"
+            match.status = MatchStatus.ONGOING
+
+            # Save tournament changes to db
+            tournaments.update({alias: tournament.to_dict()})
+            return self.send(msg.frm, f"Match `{match_name}` status set to ONGOING.")
+
+    @arg_botcmd("team_id", type=int)
+    @arg_botcmd("alias", type=str)
+    @tournament_admin_only
+    @private_message_only
+    def reset_team(self, msg: Message, alias: str, team_id: int):
+        """
+        [Admin] Reset a team information and linked captain.
+        E.g. `!reset team fortnite 123456789`
+        """
+        if alias not in self["tournaments"]:
+            return "Tournament not found"
+
+        with self.mutable("tournaments") as tournaments:
+            tournament = Tournament.from_dict(tournaments[alias])
+            team = tournament.find_team_by_id(team_id)
+            if not team:
+                return (
+                    f"Team `{team_id}` not found in the tournament {tournament.alias}"
+                    f". Try to refresh the tournament instead."
+                )
+
+            participant = self.toornament_api_client.get_participant(
+                tournament.id, team.id
+            )
+            if not participant:
+                return "Could not retrieve participant's info"
+
+            if team.captain:
+                self._remove_discord_team_captain(
+                    self.build_identifier(team.captain), tournament.captain_role
+                )
+            team.captain = None
+            team.lineup = [Player.from_dict(pl) for pl in participant["lineup"]]
+            team.custom_fields = participant["custom_fields"]
+            team.checked_in = participant["checked_in"]
+
+            # Save tournament changes to db
+            tournaments.update({alias: tournament.to_dict()})
+            return f"Team {team.name} successfully updated."
+
+    @arg_botcmd("alias", type=str)
+    @private_message_only
+    def show_matches(self, msg, alias):
+        """
+        Show the matches of a tournament.
+        E.g. `!show matches fortnite`
+        """
+        if alias not in self["tournaments"]:
+            return "Tournament not found"
+
+        tournament = Tournament.from_dict(self["tournaments"][alias])
+        self.send_card(
+            title=tournament.alias,
+            fields=(*((str(match.name), str(match)) for match in tournament.matches),),
+            in_reply_to=msg,
+        )
+
+    @arg_botcmd("match_name", type=str)
+    @arg_botcmd("alias", type=str)
+    @tournament_admin_only
+    @private_message_only
+    def show_match_scores(self, msg, alias: str, match_name: str):
+        """
+        [Admin] Show a tournament match score submissions.
+        E.g. `!show match scores fortnite match_1`
+        """
+        if alias not in self["tournaments"]:
+            return "Tournament not found"
+
+        tournament = Tournament.from_dict(self["tournaments"][alias])
+        match = tournament.find_match_by_name(match_name)
+        if not match:
+            return f"Match `{match_name}` not found."
+
+        match_scores = tournament.get_match_scores(match_name)
+        if not match_scores:
+            return "No score submissions found for this match."
+
+        match_scores = sorted(match_scores, key=lambda k: getattr(k, "team_name"))
+        match_scores_chunk = chunks(match_scores, 75)
+
+        for i, chunk in enumerate(match_scores_chunk):
+            self.send_card(
+                title=f"{match.name} @ {tournament.alias} Score Submissions "
+                f"({i + 1}/{len(match_scores_chunk)})",
+                fields=((str(score.team_name), str(score)) for score in chunk),
+                in_reply_to=msg,
+                color="white",
+            )
+
+    @arg_botcmd("alias", type=str)
+    @tournament_channel_only
+    def show_missing_teams(self, msg: Message, alias):
+        """
+        Show teams not linked on Discord.
+        E.g. `!show missing teams fortnite`
+        """
+        if alias not in self["tournaments"]:
+            return "Tournament doesn't exists"
+
+        tournament = Tournament.from_dict(self["tournaments"][alias])
+        participants = sorted(tournament.teams, key=lambda k: getattr(k, "name"))
+        participants = [p for p in participants if p.captain is None]
+        if len(participants) == 0:
+            return "Every team registered for this tournament"
+
+        missing_participants_count = (
+            len(tournament.teams) - tournament.count_linked_teams()
+        )
+        count = 1
+        participants_chunks = chunks(participants, 100)
+        for i, chunk in enumerate(participants_chunks):
+            team_names = ""
+            for team in chunk:
+                team_names += f"{count}. {team.name}\n"
+                count += 1
+
+            self.send_card(
+                title=f"{tournament.alias} Missing Registrations "
+                f"({i + 1}/{len(participants_chunks)})",
+                body=(
+                    f"Number of teams: "
+                    f"{len(tournament.teams)} \n"
+                    f"Number of missing registrations: "
+                    f"{missing_participants_count}\n\n"
+                    f"{team_names}"
+                ),
+                color="green",
+                in_reply_to=msg,
+            )
+
+    @botcmd
+    @private_message_only
+    def show_score_history(self, msg, *args):
+        """
+        [Linked] Show your linked team match score history.
+        E.g. `!show score history`
+        """
+        team, tournament = self._find_captain_team(msg.frm.fullname, self["tournaments"])
+
+        if not team:
+            return "You are not linked to a team."
+
+        self.send_card(
+            title=f"{team.name} @ {tournament.alias} Score Submissions",
+            fields=(
+                (str(score.match_name), str(score)) for score in team.score_submissions
+            ),
+            in_reply_to=msg,
+            color="grey",
+        )
+
+    @botcmd
+    @private_message_only
+    def show_status(self, msg, args):
+        """ Show your current status. """
+        team, tournament = self._find_captain_team(msg.frm.fullname, self["tournaments"])
+        if not team:
+            return "You are not the captain of a team."
+
+        self.send_card(
+            title=f"{tournament.alias} ({tournament.info.name})",
+            summary=f"To unregister, type:\n!unlink {team.name}",
+            in_reply_to=msg,
+            **team.show_card(),
+        )
+
+    @arg_botcmd("team_name", type=str, nargs="+")
+    @arg_botcmd("alias", type=str)
+    @tournament_channel_only
+    def show_team(self, msg: Message, alias: str, team_name: List[str]):
+        """
+        Show a team information.
+        E.g. `!show team fortnite Team Liquid`
+        """
+        if alias not in self["tournaments"]:
+            return "Tournament not found"
+
+        team_name = " ".join(team_name)
+
+        with self.mutable("tournaments") as tournaments:
+            tournament = Tournament.from_dict(tournaments[alias])
+            team = tournament.find_team_by_name(team_name)
+            if not team:
+                return (
+                    f"Team `{team_name}` not found in the tournament `{tournament.alias}`"
+                )
+
+            self.send_card(
+                in_reply_to=msg,
+                title=f"{team.name} @ {tournament.info.name}",
+                **team.show_card(),
+            )
+
+    @arg_botcmd("alias", type=str)
+    @tournament_channel_only
+    def show_teams(self, msg: Message, alias):
+        """
+        Show current teams linked on Discord.
+        E.g. `!show teams fortnite`
+        """
+        if alias not in self["tournaments"]:
+            return "Tournament doesn't exists"
+
+        tournament = Tournament.from_dict(self["tournaments"][alias])
+        participants = sorted(tournament.teams, key=lambda k: getattr(k, "name"))
+        participants = [p for p in participants if p.captain is not None]
+        if len(participants) == 0:
+            return "No team registered for this tournament"
+
+        count = 1
+        participants_chunks = chunks(participants, 100)
+        for i, chunk in enumerate(participants_chunks):
+            team_names = ""
+            for team in chunk:
+                team_names += f"{count}. {team.name}\n"
+                count += 1
+
+            self.send_card(
+                title=f"{tournament.alias} Registered Participants"
+                f"({i + 1}/{len(participants_chunks)})",
+                body=(
+                    f"Number of teams: "
+                    f"{len(tournament.teams)} \n"
+                    f"Number of registrations: "
+                    f"{tournament.count_linked_teams()}\n\n"
+                    f"{team_names}"
+                ),
+                color="green",
+                in_reply_to=msg,
+            )
+
+    @arg_botcmd("alias", type=str)
+    def show_tournament(self, msg, alias):
+        """
+        Show a tournament.
+        E.g. `!show tournament fortnite`
+        """
+        if alias not in self["tournaments"]:
+            return "Tournament not found."
+        tournament = Tournament.from_dict(self["tournaments"][alias])
+        self._show_tournament(msg, tournament)
+
+    @botcmd
+    def show_tournaments(self, msg, args):
+        """ Show available tournaments. E.g. `!show tournaments` """
+        if self["tournaments"]:
+            for tournament in self["tournaments"].values():
+                tournament = Tournament.from_dict(tournament)
+                self._show_tournament(msg, tournament)
+        else:
+            return "No tournaments to show."
 
     @arg_botcmd("match_name", type=str)
     @arg_botcmd("alias", type=str)
@@ -1321,63 +1335,80 @@ class TournamentManagerPlugin(BotPlugin):
             tournaments.update({alias: tournament.to_dict()})
             self.send(msg.frm, f"Match `{match_name}` status set to ONGOING.")
 
-    @arg_botcmd("--force", "-f", action="store_true")
-    @arg_botcmd("match_name", type=str)
-    @arg_botcmd("alias", type=str)
-    @tournament_admin_only
-    def end_match(self, msg, alias: str, match_name: str, force: bool):
+    @arg_botcmd("team_name", type=str, nargs="+")
+    @tournament_channel_only
+    def unlink(self, msg: Message, team_name: List[str]):
         """
-        [Admin] Set a tournament match status as completed. Players won't be able
-        to update or send new score submissions for this match.
-        E.g. `!end match fortnite match_1` or `!end match fortnite match_1 --force` to
-        force to end the match what ever the match status is.
+        [Linked] Unlink your current team with your Discord account.
+        E.g. `!unlink Team SoloMid`
         """
-        if alias not in self["tournaments"]:
-            return "Tournament not found"
 
+        team_name = " ".join(team_name)
         with self.mutable("tournaments") as tournaments:
-            tournament = Tournament.from_dict(tournaments[alias])
-            match = tournament.find_match_by_name(match_name)
-            if not match:
-                return "Match not found"
-            if match.status != MatchStatus.ONGOING and not force:
-                return f"Can't end match with status `{match.status.name}`"
+            team, tournament = self._find_captain_team(msg.frm.fullname, tournaments)
+            if not team:
+                return "You are not the captain of a team."
 
-            match.status = MatchStatus.COMPLETED
+            if team.name != team_name:
+                return (
+                    f"Your linked team name `{team.name}` is different from "
+                    f"your entry `{team_name}`. To confirm your unregistration, please "
+                    f"type the right team name."
+                )
+
+            team.captain = None
 
             # Save tournament changes to db
-            tournaments.update({alias: tournament.to_dict()})
-            return self.send(msg.frm, f"Match `{match_name}` status set to COMPLETED.")
-
-    @arg_botcmd("match_name", type=str)
-    @arg_botcmd("alias", type=str)
-    @tournament_admin_only
-    def reopen_match(self, msg, alias: str, match_name: str):
-        """
-        [Admin] Set a COMPLETED match status to ONGOING, allowing players to re-submit
-        their scores.
-        E.g. !reopen match fortnite match_1
-        """
-        if alias not in self["tournaments"]:
-            return "Tournament not found"
-
-        with self.mutable("tournaments") as tournaments:
-            tournament = Tournament.from_dict(tournaments[alias])
-            match = tournament.find_match_by_name(match_name)
-            if not match:
-                return "Match not found"
-
-            if match.status != MatchStatus.COMPLETED:
-                return f"Can't reopen match with status `{match.status.name}`"
-            match.status = MatchStatus.ONGOING
-
-            # Save tournament changes to db
-            tournaments.update({alias: tournament.to_dict()})
-            return self.send(msg.frm, f"Match `{match_name}` status set to ONGOING.")
+            tournaments.update({tournament.alias: tournament.to_dict()})
+            self._remove_discord_team_captain(msg.frm, tournament.captain_role)
+            return f"You are no longer the captain of the team `{team_name}`."
 
     """
     Utils
     """
+
+    @staticmethod
+    def _add_discord_team_captain(
+        user: DiscordPerson, team_name: str, captain_role: Optional[str]
+    ):
+        """
+        Update Discord user nickname and add role if tournament captain_role is set
+        """
+        # magic number 32, discord max username length, shhht
+        max_length = 32 - (len(user.nick) + 4)
+        discord_team_name = team_name[:max_length] + (team_name[max_length:] and "..")
+        discord_captain_name = f"{user.nick}[{discord_team_name}]"
+
+        # Update username nickname
+        user.edit_nickname(discord_captain_name)
+
+        if captain_role:
+            if not user.has_guild_role(captain_role):
+                sleep(1)
+                user.add_role(captain_role)
+
+    @staticmethod
+    def _find_captain_team(
+        username: str, tournaments: dict
+    ) -> Tuple[Optional[Team], Optional[Tournament]]:
+        for t in tournaments.values():
+            tournament = Tournament.from_dict(t)
+            team = tournament.find_team_by_captain(username)
+            if team:
+                return team, tournament
+        return None, None
+
+    @staticmethod
+    def _remove_discord_team_captain(user: DiscordPerson, captain_role: Optional[str]):
+        """
+        Reset Discord user nickname and remove role if tournament captain_role is set
+        """
+        user.edit_nickname(user.username)
+
+        if captain_role:
+            if user.has_guild_role(captain_role):
+                sleep(1)
+                user.remove_role(captain_role)
 
     def _show_match(self, msg, tournament: Tournament, match: Match, public=True):
         additional_fields = ()
@@ -1419,49 +1450,6 @@ class TournamentManagerPlugin(BotPlugin):
             in_reply_to=msg,
             **tournament.show_card(),
         )
-
-    @staticmethod
-    def _find_captain_team(
-        username: str, tournaments: dict
-    ) -> Tuple[Optional[Team], Optional[Tournament]]:
-        for t in tournaments.values():
-            tournament = Tournament.from_dict(t)
-            team = tournament.find_team_by_captain(username)
-            if team:
-                return team, tournament
-        return None, None
-
-    @staticmethod
-    def _add_discord_team_captain(
-        user: DiscordPerson, team_name: str, captain_role: Optional[str]
-    ):
-        """
-        Update Discord user nickname and add role if tournament captain_role is set
-        """
-        # magic number 32, discord max username length, shhht
-        max_length = 32 - (len(user.nick) + 4)
-        discord_team_name = team_name[:max_length] + (team_name[max_length:] and "..")
-        discord_captain_name = f"{user.nick}[{discord_team_name}]"
-
-        # Update username nickname
-        user.edit_nickname(discord_captain_name)
-
-        if captain_role:
-            if not user.has_guild_role(captain_role):
-                sleep(1)
-                user.add_role(captain_role)
-
-    @staticmethod
-    def _remove_discord_team_captain(user: DiscordPerson, captain_role: Optional[str]):
-        """
-        Reset Discord user nickname and remove role if tournament captain_role is set
-        """
-        user.edit_nickname(user.username)
-
-        if captain_role:
-            if user.has_guild_role(captain_role):
-                sleep(1)
-                user.remove_role(captain_role)
 
     def _is_tournament_admin(self, user: DiscordPerson) -> bool:
         admin_roles = list(
