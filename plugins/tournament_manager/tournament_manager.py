@@ -3,10 +3,7 @@ import itertools
 import logging
 import os
 import tempfile
-from dataclasses import dataclass, field, fields, asdict, is_dataclass
 from datetime import datetime
-from enum import IntEnum
-from functools import wraps
 from time import sleep
 from typing import Optional, List, Tuple
 
@@ -14,306 +11,24 @@ import discord
 from errbot import BotPlugin, botcmd, Message, arg_botcmd
 
 from backends.discord.discord import DiscordPerson
-from clients.toornament_api_client import ToornamentAPIClient
+from plugins.tournament_manager.clients.toornament_api_client import ToornamentAPIClient
+from plugins.tournament_manager.decorators import (
+    private_message_only,
+    tournament_channel_only,
+    tournament_admin_only,
+)
+from plugins.tournament_manager.models import (
+    Match,
+    MatchStatus,
+    Player,
+    ScoreSubmission,
+    Team,
+    ToornamentInfo,
+    Tournament,
+)
+from plugins.tournament_manager.utils.chunks import chunks
 
 logger = logging.getLogger(__name__)
-
-
-def tournament_admin_only(func):
-    """ Allow a command to be used by a tournament admin only """
-
-    @wraps(func)
-    def wrap(*args, **kwargs):
-        plugin, msg, *_ = args
-
-        # is superuser
-        if msg.frm.fullname in plugin.bot_config.BOT_ADMINS:
-            return func(*args, **kwargs)
-
-        # is tournament admin
-        for tournament in plugin["tournaments"].values():
-            if any(msg.frm.has_guild_role(r) for r in tournament["administrator_roles"]):
-                return func(*args, **kwargs)
-
-        plugin.send(msg.frm, "You are not allowed to perform this action")
-
-    return wrap
-
-
-def private_message_only(func):
-    """ Allow a command to be used in private message only """
-
-    @wraps(func)
-    def wrap(*args, **kwargs):
-        plugin, msg, *_ = args
-        if msg.is_direct:
-            return func(*args, **kwargs)
-        plugin.send(msg.frm, "Please use this command in private message.")
-
-    return wrap
-
-
-def tournament_channel_only(func):
-    """ Allow a command to be used in private message only """
-
-    @wraps(func)
-    def wrap(*args, **kwargs):
-        def sanitize_channel(name):
-            return name.replace("<", "").replace(">", "")
-
-        plugin, msg, *_ = args
-        room = sanitize_channel(str(msg.frm.room))
-        tournament_channels = plugin["tournaments"][kwargs["alias"]]["channels"]
-        # no tournament channel set
-        if not tournament_channels:
-            return func(*args, **kwargs)
-        # tournament channel set
-        for channel in tournament_channels:
-            if sanitize_channel(channel) == room:
-                return func(*args, **kwargs)
-
-        plugin.send(
-            msg.frm,
-            "Please use this command in the tournament assigned bot channels: "
-            + " ".join(tournament_channels),
-        )
-
-    return wrap
-
-
-class MatchStatus(IntEnum):
-    PENDING = 1
-    ONGOING = 2
-    COMPLETED = 3
-
-
-@dataclass
-class BaseDataClass:
-    def __post_init__(self):
-        """
-        Convert all fields of type `dataclass` into an instance of the
-        specified data class if the current value is of type dict.
-
-        There's some real sketchy stuff here bro.
-        """
-
-        def unpack_values(field_type, val):
-            """ unpack dict if field exists for this type """
-            return field_type(
-                **{
-                    k: v
-                    for k, v in val.items()
-                    if k in {ft.name for ft in fields(field_type)}
-                }
-            )
-
-        cls = type(self)
-        for f in fields(cls):
-            is_list_of_dataclass = (
-                hasattr(f.type, "_name")
-                and f.type._name == "List"
-                and is_dataclass(next(iter(f.type.__args__), None))
-            )
-            # if the field is not a dataclass, OR is not a List of dataclasses
-            if not is_dataclass(f.type) and not is_list_of_dataclass:
-                continue
-
-            value = getattr(self, f.name)
-
-            if isinstance(value, dict):
-                new_value = unpack_values(f.type, value)
-                setattr(self, f.name, new_value)
-            elif isinstance(value, list):
-                new_value = []
-                for v in value:
-                    if isinstance(v, dict):
-                        new_value.append(unpack_values(f.type.__args__[0], v))
-                setattr(self, f.name, new_value)
-
-    @classmethod
-    def from_dict(cls, values: dict):
-        """ Ignore dict keys if they're not a field of the dataclass """
-        class_fields = {f.name for f in fields(cls)}
-        return cls(**{k: v for k, v in values.items() if k in class_fields})
-
-    def to_dict(self):
-        return asdict(self)
-
-
-@dataclass
-class ScoreSubmission(BaseDataClass):
-    match_name: str
-    team_name: str
-    screenshot_links: List[str] = field(default_factory=list)
-    position: Optional[int] = field(default=None)
-    eliminations: Optional[int] = field(default=None)
-    last_updated: str = field(default=datetime.now().strftime("%m/%d/%Y %H:%M:%S"))
-
-    def get_screenshots(self) -> str:
-        return ", ".join(f"<{u}>" for u in self.screenshot_links)
-
-    def show_card(self) -> dict:
-        return {
-            "title": self.team_name,
-            "fields": (
-                ("Match", self.match_name),
-                ("Position", self.position),
-                ("Eliminations", self.eliminations),
-                ("Last update", self.last_updated),
-                ("Screenshots", self.get_screenshots()),
-            ),
-            "color": "grey",
-        }
-
-    def __str__(self):
-        return (
-            f"```Position:      {self.position}\n"
-            f"Eliminations:  {self.eliminations}\n"
-            f"Last update:   {self.last_updated}```" + "\n".join(self.screenshot_links)
-        )
-
-
-@dataclass
-class Player(BaseDataClass):
-    name: str
-    custom_fields: List[str] = field(default_factory=list)
-    email: Optional[str] = field(default=None)
-
-
-@dataclass
-class Team(BaseDataClass):
-    id: int
-    name: str
-    custom_fields: List[str] = field(default_factory=list)
-    lineup: List[Player] = field(default_factory=list)
-    captain: Optional[str] = field(default=None)
-    checked_in: Optional[bool] = field(default=None)
-    score_submissions: List[ScoreSubmission] = field(default_factory=list)
-
-    def find_submission_by_match(self, match_name: str) -> Optional[ScoreSubmission]:
-        for s in self.score_submissions:
-            if s.match_name == match_name:
-                return s
-        return None
-
-    def show_card(self) -> dict:
-        return {
-            "fields": (
-                ("Team Name", self.name),
-                ("Team ID", self.id),
-                ("Team Captain", self.captain),
-                ("Team Players", "\n".join(pl.name for pl in self.lineup)),
-            ),
-            "color": "grey",
-        }
-
-
-@dataclass
-class Match(BaseDataClass):
-    name: str
-    created_by: str
-    password: Optional[str] = field(default=None)
-    status: MatchStatus = field(default=MatchStatus.PENDING)
-    teams_ready: List[Team] = field(default_factory=list)
-
-    def find_team_by_name(self, team_name: str) -> Optional[Team]:
-        for team in self.teams_ready:
-            if team.name == team_name:
-                return team
-        return None
-
-    def __str__(self):
-        return (
-            f"**Status:** {self.status.name}\n"
-            f"**Teams Ready:** {len(self.teams_ready)}"
-            f"**Created by:** {self.created_by}\n",
-        )
-
-
-@dataclass
-class ToornamentInfo(BaseDataClass):
-    id: int
-    country: str
-    discipline: str
-    location: str
-    name: str
-    scheduled_date_end: str
-    scheduled_date_start: str
-    size: int
-    status: str
-    team_max_size: int
-    team_min_size: int
-    rule: Optional[str] = field(default=None)
-    prize: Optional[str] = field(default=None)
-    platforms: List[str] = field(default_factory=list)
-
-
-@dataclass
-class Tournament(BaseDataClass):
-    id: int
-    alias: str
-    info: ToornamentInfo = field(default=None)
-    administrator_roles: List[str] = field(default_factory=list)
-    captain_role: str = field(default=None)
-    channels: List[str] = field(default_factory=list)
-    matches: List[Match] = field(default_factory=list)
-    teams: List[Team] = field(default_factory=list)
-    url: Optional[str] = field(default=None)
-
-    def count_linked_teams(self) -> int:
-        return sum([p.captain is not None for p in self.teams])
-
-    def find_match_by_name(self, name: str) -> Optional[Match]:
-        for m in self.matches:
-            if m.name == name:
-                return m
-        return None
-
-    def find_team_by_captain(self, captain_name: str) -> Optional[Team]:
-        for p in self.teams:
-            if p.captain == captain_name:
-                return p
-        return None
-
-    def find_team_by_id(self, team_id: int) -> Optional[Team]:
-        for p in self.teams:
-            if p.id == str(team_id):
-                return p
-        return None
-
-    def find_team_by_name(self, team_name: str) -> Optional[Team]:
-        for p in self.teams:
-            if p.name == team_name:
-                return p
-        return None
-
-    def get_match_scores(self, match_name: str) -> List[ScoreSubmission]:
-        submissions = []
-        for team in self.teams:
-            submission = team.find_submission_by_match(match_name)
-            if submission:
-                submissions.append(submission)
-
-        return submissions
-
-    def show_card(self) -> dict:
-        return {
-            "title": f"{self.alias} ({self.info.name})",
-            "link": self.url,
-            "fields": (
-                ("Tournament Alias", str(self.alias)),
-                ("Toornament ID", str(self.info.id)),
-                ("Game", self.info.discipline),
-                ("Linked Teams", str(self.count_linked_teams())),
-                ("Registered Teams", str(len(self.teams))),
-                ("Bot Channels", "\n".join(self.channels) or None),
-                ("Captain Role", f"@{self.captain_role}" if self.captain_role else None),
-                (
-                    "Tournament Administrator Roles",
-                    ", ".join(f"@{r}" for r in self.administrator_roles) or None,
-                ),
-            ),
-        }
 
 
 class TournamentManagerPlugin(BotPlugin):
@@ -1462,8 +1177,3 @@ class TournamentManagerPlugin(BotPlugin):
         ):
             return True
         return False
-
-
-def chunks(l, n):
-    """Yield successive n-sized chunks from l."""
-    return list(l[i : i + n] for i in range(0, len(l), n))
