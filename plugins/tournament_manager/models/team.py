@@ -8,7 +8,7 @@ from .score_submission import ScoreSubmission
 
 @dataclass
 class Team(BaseDataClass):
-    id: int
+    id: str
     name: str
     custom_fields: List[str] = field(default_factory=list)
     lineup: List[Player] = field(default_factory=list)
@@ -29,6 +29,5 @@ class Team(BaseDataClass):
                 ("Team ID", self.id),
                 ("Team Captain", self.captain),
                 ("Team Players", "\n".join(pl.name for pl in self.lineup)),
-            ),
-            "color": "grey",
+            )
         }

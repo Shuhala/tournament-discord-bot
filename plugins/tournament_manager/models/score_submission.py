@@ -12,7 +12,7 @@ class ScoreSubmission(BaseDataClass):
     screenshot_links: List[str] = field(default_factory=list)
     position: Optional[int] = field(default=None)
     eliminations: Optional[int] = field(default=None)
-    last_updated: str = field(default=datetime.now().strftime("%m/%d/%Y %H:%M:%S"))
+    updated_at: str = field(default=datetime.now().strftime("%m/%d/%Y %H:%M:%S"))
 
     def get_screenshots(self) -> str:
         return ", ".join(f"<{u}>" for u in self.screenshot_links)
@@ -24,7 +24,7 @@ class ScoreSubmission(BaseDataClass):
                 ("Match", self.match_name),
                 ("Position", self.position),
                 ("Eliminations", self.eliminations),
-                ("Last update", self.last_updated),
+                ("Updated at", self.updated_at),
                 ("Screenshots", self.get_screenshots()),
             ),
             "color": "grey",
@@ -32,7 +32,7 @@ class ScoreSubmission(BaseDataClass):
 
     def __str__(self):
         return (
-            f"```Position:      {self.position}\n"
+            f"```ldif\nPosition:      {self.position}\n"
             f"Eliminations:  {self.eliminations}\n"
-            f"Last update:   {self.last_updated}```" + "\n".join(self.screenshot_links)
+            f"Updated at:   {self.updated_at}```" + "\n".join(self.screenshot_links)
         )
