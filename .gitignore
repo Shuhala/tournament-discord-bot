@@ -5,3 +5,4 @@
 __pycache__
 config.ini
 data/*.db
+data/backup.py
