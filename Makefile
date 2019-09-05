@@ -10,6 +10,13 @@ run: build
 		discord_bot \
 			poetry run errbot
 
+.PHONY: run-prod
+run-prod: build
+	@docker run \
+		-v $$(pwd):/opt/app -d \
+		discord_bot \
+			poetry run errbot
+
 .PHONY: clean
 clean:
 	rm -rf data/*.db
