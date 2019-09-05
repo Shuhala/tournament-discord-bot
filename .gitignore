@@ -1,4 +1,5 @@
 *.log
+.backup
 .idea
 .venv
 __pycache__
