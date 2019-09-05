@@ -6,14 +6,19 @@ build:
 .PHONY: run
 run: build
 	@docker run \
-		-v $$(pwd):/opt/app --rm --name errbot \
+		-v $$(pwd):/opt/app \
+		--name errbot \
+		--rm \
 		discord_bot \
 			poetry run errbot
 
 .PHONY: run-prod
 run-prod: build
 	@docker run \
-		-v $$(pwd):/opt/app --rm --name errbot -d \
+		-v $$(pwd):/opt/app \
+		--name errbot \
+		--rm \
+		-d \
 		discord_bot \
 			poetry run errbot
 
