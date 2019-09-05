@@ -4,7 +4,7 @@ build:
 	@docker build -t discord_bot .
 
 .PHONY: run
-run:
+run: build
 	@docker run \
 		-v $$(pwd):/opt/app \
 		discord_bot \

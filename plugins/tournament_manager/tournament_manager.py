@@ -133,6 +133,12 @@ class TournamentManagerPlugin(BotPlugin):
             )
             self.send(msg.frm, help_message)
 
+        self.send(
+            msg.frm,
+            "Commands summary are also available at this link: "
+            "<https://docs.google.com/document/d/1eedLoQdVLVe2JkCe19g69w-UUL49iFW93mz4piypY1k/edit?usp=sharing>",  # noqa
+        )
+
     @arg_botcmd("role", type=str, nargs="+")
     @arg_botcmd("alias", type=str, admin_only=True)
     @tournament_admin_only
