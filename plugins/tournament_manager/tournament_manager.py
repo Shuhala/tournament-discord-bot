@@ -679,6 +679,31 @@ class TournamentManagerPlugin(BotPlugin):
             tournaments.update({alias: tournament.to_dict()})
             return f"Tournament {tournament.alias} successfully refreshed."
 
+    @arg_botcmd("alias", type=str)
+    @tournament_admin_only
+    def show_tournament_refresh_status(self, msg: Message, alias: str):
+        """
+        [Admin] Show difference between current Tournament and
+        Toornament participants list
+        """
+        if alias not in self["tournaments"]:
+            return "Tournament not found"
+
+        # current tournament teams ids
+        tournament = Tournament.from_dict(self["tournaments"][alias])
+        tournament_team_ids = set(p.id for p in tournament.teams)
+        # toornament participants ids
+        participants = self.toornament_api_client.get_participants(tournament.id)
+        toornament_participant_ids = set(p["id"] for p in participants)
+
+        teams_deleted = tournament_team_ids - toornament_participant_ids
+        teams_added = toornament_participant_ids - tournament_team_ids
+
+        self.send(
+            msg.frm, f"**Teams ID deleted:**\n" + "\n".join(i for i in teams_deleted)
+        )
+        self.send(msg.frm, f"**Teams ID added:**\n" + "\n".join(i for i in teams_added))
+
     @arg_botcmd("role", type=str, nargs="+")
     @arg_botcmd("alias", type=str, admin_only=True)
     @tournament_admin_only

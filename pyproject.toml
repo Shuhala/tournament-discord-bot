@@ -29,6 +29,7 @@ exclude = '''
   | build
   | dist
   | venv
+  | data
 )/
 '''
 
