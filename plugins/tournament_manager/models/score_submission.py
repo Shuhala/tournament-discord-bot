@@ -24,15 +24,35 @@ class ScoreSubmission(BaseDataClass):
                 ("Match", self.match_name),
                 ("Position", self.position),
                 ("Eliminations", self.eliminations),
+                ("Calculated Points", self.count_points()),
                 ("Updated at", self.updated_at),
                 ("Screenshots", self.get_screenshots()),
             ),
             "color": "grey",
         }
 
+    def count_points(self) -> int:
+        position_points = {
+            1: 15,
+            2: 12,
+            3: 9,
+            4: 9,
+            5: 6,
+            6: 6,
+            7: 6,
+            8: 6,
+            9: 3,
+            10: 3,
+            11: 3,
+            12: 3,
+        }
+        return position_points.get(self.position, 0) + self.eliminations
+
     def __str__(self):
         return (
-            f"```ldif\nPosition:      {self.position}\n"
-            f"Eliminations:  {self.eliminations}\n"
-            f"Updated at:   {self.updated_at}```" + "\n".join(self.screenshot_links)
+            f"```ldif\nPosition:           {self.position}\n"
+            f"Eliminations:       {self.eliminations}\n"
+            f"Updated at:         {self.updated_at}\n"
+            f"Calculated points:  {self.count_points()}```"
+            + "\n".join(self.screenshot_links)
         )

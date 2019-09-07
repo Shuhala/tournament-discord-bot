@@ -478,7 +478,14 @@ class TournamentManagerPlugin(BotPlugin):
             with open(path, "w") as csvfile:
                 fw = csv.writer(csvfile, delimiter=",")
                 fw.writerow(
-                    ["Team Name", "Updated at", "Position", "Eliminations", "Screenshots"]
+                    [
+                        "Team Name",
+                        "Updated at",
+                        "Position",
+                        "Eliminations",
+                        "Points",
+                        "Screenshots",
+                    ]
                 )
                 for ms in match_scores:
                     fw.writerow(
@@ -487,6 +494,7 @@ class TournamentManagerPlugin(BotPlugin):
                             ms.updated_at,
                             ms.position,
                             ms.eliminations,
+                            ms.count_points(),
                             " ".join(ms.screenshot_links),
                         ]
                     )
