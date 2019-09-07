@@ -1079,6 +1079,29 @@ class TournamentManagerPlugin(BotPlugin):
                 color="grey",
             )
 
+    @arg_botcmd("team_id", type=int)
+    @arg_botcmd("alias", type=str)
+    @tournament_channel_only
+    def show_team_by_id(self, msg: Message, alias: str, team_id: int):
+        """
+        Show a team information.
+        E.g. `!show team by id fortnite 123456789`
+        """
+        if alias not in self["tournaments"]:
+            return "Tournament not found"
+
+        tournament = Tournament.from_dict(self["tournaments"][alias])
+        team = tournament.find_team_by_id(team_id)
+        if not team:
+            return f"Team `{team.name}` not found in the tournament `{tournament.alias}`"
+
+        self.send_card(
+            in_reply_to=msg,
+            title=f"{team.name} @ {tournament.info.name}",
+            **team.show_card(),
+            color="grey",
+        )
+
     @arg_botcmd("alias", type=str)
     @private_message_only
     def show_teams(self, msg: Message, alias):
