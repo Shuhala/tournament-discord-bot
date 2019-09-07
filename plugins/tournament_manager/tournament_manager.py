@@ -320,6 +320,14 @@ class TournamentManagerPlugin(BotPlugin):
                             f"score.",
                         )
                         return
+                    # Team not registered in this game
+                    if match.id and team.id not in match.teams_registered:
+                        self.send(
+                            msg.frm,
+                            "You are not authorized to submit a score for this match, "
+                            f"your team is not registered in this match group "
+                            f"`{match.group_name}`",
+                        )
                     # invalid entries
                     if not position.isdigit() or not eliminations.isdigit():
                         self.send(
@@ -423,11 +431,12 @@ class TournamentManagerPlugin(BotPlugin):
                     )
                     tournaments.update({tournament.alias: tournament.to_dict()})
 
+    @arg_botcmd("match_id", type=int, nargs="?")
     @arg_botcmd("password", type=str)
     @arg_botcmd("match_name", type=str)
     @arg_botcmd("alias", type=str)
     @tournament_admin_only
-    def create_match(self, msg, alias, match_name, password):
+    def create_match(self, msg, alias, match_name, password, match_id):
         """
         [Admin] Create a tournament match.
         E.g. `!create match fortnite match_1 secretPassword`
@@ -441,11 +450,26 @@ class TournamentManagerPlugin(BotPlugin):
             if match:
                 return "Match name already exists"
 
-            match = Match(name=match_name, created_by=msg.frm.fullname, password=password)
-            tournament.matches.append(match)
+            match = Match(
+                id=match_id,
+                name=match_name,
+                created_by=msg.frm.fullname,
+                password=password,
+            )
 
+            if match_id:
+                match_info = self.toornament_api_client.get_match(tournament.id, match_id)
+                if not match_info:
+                    return f"Match id `{match_id}` not found"
+                match.group_name = match_info["public_notes"]
+                match.teams_registered = [
+                    p["participant"]["id"] for p in match_info["opponents"]
+                ]
+
+            tournament.matches.append(match)
             # Save tournament changes to db
             tournaments.update({alias: tournament.to_dict()})
+
             self.send(msg.frm, f"Match `{match_name}` successfully created.")
             self._show_match(msg, tournament, match)
 
@@ -549,6 +573,12 @@ class TournamentManagerPlugin(BotPlugin):
             if not match:
                 return "Match not found"
 
+            if match.id and team.id not in match.teams_registered:
+                return (
+                    f"You are not authorized to join this match (ﾉ°□°)ﾉ ﾐ ┻━┻ !! "
+                    f"Team `{team.name}` is not in this match group `{match.group_name}`"
+                )
+
             if team.id in match.teams_joined:
                 return f"Team `{team.name}` has already joined this match"
 
@@ -563,39 +593,6 @@ class TournamentManagerPlugin(BotPlugin):
                 msg.frm, f"Team `{team.name}` is now ready for the match {match.name}!"
             )
             self._show_match(msg, tournament, match)
-
-    @arg_botcmd("match_name", type=str)
-    @tournament_channel_only
-    def ready(self, msg: Message, match_name: str):
-        """
-        [Linked] Set your team as ready for a match.
-        E.g. `!ready match_1`
-        """
-        with self.mutable("tournaments") as tournaments:
-            team, tournament = self._find_captain_team(msg.frm.fullname, tournaments)
-            if not team:
-                return "You are not a team captain."
-
-            match = tournament.find_match_by_name(match_name)
-            if not match:
-                return "Match not found"
-
-            if team.id not in match.teams_joined:
-                return (
-                    f"Team `{team.name}` hasn't joined this match. "
-                    f"Please use `!join [match_name]` first"
-                )
-
-            if match.status != MatchStatus.PENDING:
-                return f"Can't set team status to ready, match has already started."
-
-            match.teams_ready.append(team.id)
-
-            # Save tournament changes to db
-            tournaments.update({tournament.alias: tournament.to_dict()})
-            self.send(
-                msg.frm, f"Team `{team.name}` is now ready for the match {match.name}!"
-            )
 
     @arg_botcmd("match_name", type=str)
     @tournament_channel_only
@@ -1415,9 +1412,11 @@ class TournamentManagerPlugin(BotPlugin):
             ("Status", f"{match.status.name}\n"),
             (
                 "Teams Joined",
-                f"{len(match.teams_joined)}/" f"{tournament.count_linked_teams()}\n",
+                f"{len(match.teams_joined)}/" f"{len(match.teams_registered)}\n",
             ),
             ("Created by", f"{match.created_by}\n"),
+            ("Match ID", f"{match.id}\n"),
+            ("Group", f"{match.group_name}\n"),
         ]
 
         has_joined_the_match = bool(team and team.id in match.teams_joined)

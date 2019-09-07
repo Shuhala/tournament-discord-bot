@@ -56,6 +56,18 @@ class ToornamentAPIClient:
 
         return next(iter(self._get_full_result(url, headers)), {})
 
+    def get_match(self, tournament_id, match_id) -> Optional[dict]:
+        headers = self._get_headers(scope="organizer:result", range="matches=0-99")
+        url = f"{self.api_url}/viewer/v2/tournaments/{tournament_id}/matches/{match_id}"
+
+        return next(iter(self._get_full_result(url, headers)), {})
+
+    def get_matches(self, tournament_id, params: Optional[dict] = None) -> List[dict]:
+        headers = self._get_headers(scope="organizer:result", range="matches=0-99")
+        url = f"{self.api_url}/viewer/v2/tournaments/{tournament_id}/matches"
+
+        return self._get_full_result(url, headers, params=params)
+
     def get_participants(
         self, tournament_id, params: Optional[dict] = None
     ) -> List[dict]:
