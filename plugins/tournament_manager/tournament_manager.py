@@ -599,7 +599,7 @@ class TournamentManagerPlugin(BotPlugin):
 
             return (
                 f"You are now the captain of the team `{team_name}`. "
-                f"Use `!show status` to display information about your team."
+                f"Use `!show status` in private to display information about your team."
             )
 
     @arg_botcmd("discord_user", type=str, nargs="+")
