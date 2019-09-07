@@ -265,37 +265,23 @@ class TournamentManagerPlugin(BotPlugin):
     def callback_attachment(self, msg: Message, discord_msg: discord.Message):
         """ Send screenshots in private message to bot """
         if hasattr(msg.to, "fullname") and msg.to.fullname == str(self.bot_identifier):
+            cmds = ["!submit", "!add", "!add_screenshot"]
             msg_parts = msg.body.strip().split(" ")
-            if not msg_parts or not msg_parts[0] == "!submit":
+
+            if not msg_parts or msg_parts[0] not in cmds:
                 self.send(
                     msg.frm,
                     (
                         "Wow! Thank you so much for this beautiful attachment!\n"
                         "Unfortunately, I'm unsure what I'm supposed to do with that."
                         " Are you trying to submit a match score screenshot?\n"
-                        "Try to send me this again with the text: "
+                        "To submit a score for a match, use: "
                         "`submit [match_name] position [number] eliminations [number]`.\n"
+                        "To add a screenshot to your previous score submission, use: "
+                        "`!add screenshot [match_name]`.\n"
+                        "To remove a score submission for a match and add a new one, use "
+                        "`!remove score [match_name]`."
                     ),
-                )
-                return
-
-            if len(msg_parts) != 6:
-                self.send(
-                    msg.frm,
-                    (
-                        "Looks like you're trying to submit your score!\n\n"
-                        "Your screenshot must be followed with the following"
-                        " information: "
-                        "`!submit [match_name] position [number] eliminations [number]`\n"
-                    ),
-                )
-                return
-
-            _, match_name, _, position, _, eliminations = msg_parts
-            if not position.isdigit() or not eliminations.isdigit():
-                self.send(
-                    msg.frm,
-                    "Invalid entry for position or eliminations. A number was expected.",
                 )
                 return
 
@@ -305,41 +291,65 @@ class TournamentManagerPlugin(BotPlugin):
                     self.send(msg.frm, "You are not the captain of a team.")
                     return
 
-                match = tournament.find_match_by_name(match_name)
-                if not match:
-                    # We also allow teams that haven't joined the match to
-                    # submit their score in case something happened, we still
-                    # want them to enjoy this feature.
-                    self.send(
-                        msg.frm,
-                        f"There is no match with the name `{match_name}` for "
-                        f"the `{tournament.alias}` tournament. Can't submit "
-                        f"score.",
-                    )
-                    return
+                # !submit
+                if msg_parts[0] == "!submit":
 
-                if match.status == MatchStatus.COMPLETED:
-                    self.send(
-                        msg.frm,
-                        f"Can't submit score for the match `{match_name}`. "
-                        f"Match status is set to COMPLETED. Submissions are now locked. "
-                        f"Please contact your Tournament Administrator.",
-                    )
-                    return
+                    # invalid format
+                    if len(msg_parts) != 6:
+                        self.send(
+                            msg.frm,
+                            (
+                                "Looks like you're trying to submit your score!\n\n"
+                                "Your screenshot must be followed with the following"
+                                " information: "
+                                "`!submit [match_name] position [number] "
+                                "eliminations [number]`\n"
+                            ),
+                        )
+                        return
 
-                score = team.find_submission_by_match(match_name)
-                if score:
-                    # update previous score submission
-                    score.screenshot_links = [a.url for a in discord_msg.attachments]
-                    score.position = int(position)
-                    score.eliminations = int(eliminations)
-                    score.updated_at = datetime.now().strftime("%m/%d/%Y %H:%M:%S")
-                    self.send(
-                        msg.frm,
-                        "Score successfully updated! Type `!show scores` "
-                        "to see your score submissions history.",
-                    )
-                else:
+                    _, match_name, _, position, _, eliminations = msg_parts
+                    match = tournament.find_match_by_name(match_name)
+
+                    # match not found
+                    if not match:
+                        self.send(
+                            msg.frm,
+                            f"There is no match with the name `{match_name}` for "
+                            f"the `{tournament.alias}` tournament. Can't submit "
+                            f"score.",
+                        )
+                        return
+                    # invalid entries
+                    if not position.isdigit() or not eliminations.isdigit():
+                        self.send(
+                            msg.frm,
+                            "Invalid entry for position or eliminations. "
+                            "A number was expected.",
+                        )
+                        return
+                    # match completed, submissions locked
+                    if match.status == MatchStatus.COMPLETED:
+                        self.send(
+                            msg.frm,
+                            f"Can't submit score for the match `{match_name}`. "
+                            f"Match status is set to COMPLETED. "
+                            f"Submissions are now locked. "
+                            f"Please contact your Tournament Administrator.",
+                        )
+                        return
+                    # score already submitted
+                    score = team.find_submission_by_match(match_name)
+                    if score:
+                        self.send(
+                            msg.frm,
+                            f"Score for the match `{match_name}` already submitted.\n"
+                            f"Use `!remove score [match_name]` if you want to submit "
+                            f"a different score, or `!add screenshot [match_name]` to "
+                            f"add a screenshot to your submission.",
+                        )
+                        return
+
                     # add score
                     score = ScoreSubmission(
                         match_name=match_name,
@@ -351,12 +361,67 @@ class TournamentManagerPlugin(BotPlugin):
                     team.score_submissions.append(score)
                     self.send(
                         msg.frm,
-                        "Score successfully added! Type `!show score history` "
+                        "Score successfully added! Type `!show scores` "
                         "to see your score submissions history.",
                     )
+                    tournaments.update({tournament.alias: tournament.to_dict()})
 
-                # Save tournament changes to db
-                tournaments.update({tournament.alias: tournament.to_dict()})
+                # add screenshot
+                elif (msg_parts[0] == "!add" and msg_parts[1] == "screenshot") or (
+                    msg_parts[0] == "!add_screenshot"
+                ):
+                    if len(msg_parts) == 3:
+                        match_name = msg_parts[2]
+                    elif len(msg_parts) == 2:
+                        match_name = msg_parts[1]
+                    else:
+                        self.send(
+                            msg.frm,
+                            "Invalid command format. Use `!add screenshot [match_name]`",
+                        )
+                        return
+
+                    match = tournament.find_match_by_name(match_name)
+
+                    # match not found
+                    if not match:
+                        self.send(
+                            msg.frm,
+                            f"There is no match with the name `{match_name}` for "
+                            f"the `{tournament.alias}` tournament. Can't submit "
+                            f"score.",
+                        )
+                        return
+                    # match completed, submissions locked
+                    if match.status == MatchStatus.COMPLETED:
+                        self.send(
+                            msg.frm,
+                            f"Can't submit score for the match `{match_name}`. "
+                            f"Match status is set to COMPLETED. "
+                            f"Submissions are now locked. "
+                            f"Please contact your Tournament Administrator.",
+                        )
+                        return
+
+                    # update score
+                    score = team.find_submission_by_match(match_name)
+                    if not score:
+                        self.send(
+                            msg.frm,
+                            f"No score submission found for the match `{match_name}`. "
+                            "Use `!submit [match_name] position [number] "
+                            "eliminations [number]` to submit your score.\n",
+                        )
+                    score.screenshot_links.extend(
+                        [a.url for a in discord_msg.attachments]
+                    )
+                    score.updated_at = datetime.now().strftime("%m/%d/%Y %H:%M:%S")
+                    self.send(
+                        msg.frm,
+                        "Score successfully updated! Type `!show score history` "
+                        "to see your score submissions history.",
+                    )
+                    tournaments.update({tournament.alias: tournament.to_dict()})
 
     @arg_botcmd("password", type=str)
     @arg_botcmd("match_name", type=str)
@@ -570,7 +635,7 @@ class TournamentManagerPlugin(BotPlugin):
             team, tournament = self._find_captain_team(msg.frm.fullname, tournaments)
             if team:
                 if team.name == team_name:
-                    return "You are already this team"
+                    return "You are already linked to this team"
                 return (
                     "You can't be the captain of more than one team.\n"
                     f"You are currently the captain of the team `{team.name}` for the "
@@ -770,6 +835,29 @@ class TournamentManagerPlugin(BotPlugin):
             # Save tournament changes to db
             tournaments.update({alias: tournament.to_dict()})
             return f"Channels successfully removed from the tournament"
+
+    @arg_botcmd("match_name", type=str)
+    @arg_botcmd("alias", type=str)
+    @tournament_admin_only
+    def remove_match(self, msg, alias, match_name):
+        """
+        [Admin] Remove a linked Discord channel from a tournament.
+        E.g. !remove channel fornite #fortnite-tournament
+        """
+        if alias not in self["tournaments"]:
+            return "Tournament not found."
+
+        with self.mutable("tournaments") as tournaments:
+            tournament = Tournament.from_dict(tournaments[alias])
+            match = tournament.find_match_by_name(match_name)
+            if not match:
+                return "Match not found"
+
+            tournament.matches.remove(match)
+
+            # Save tournament changes to db
+            tournaments.update({alias: tournament.to_dict()})
+            return f"Match `{match_name}` successfully removed from the tournament"
 
     @arg_botcmd("match_name", type=str)
     @private_message_only
