@@ -651,7 +651,7 @@ class TournamentManagerPlugin(BotPlugin):
 
             if team.captain is not None:
                 return (
-                    f"Team `{team_name}` is already registered with the "
+                    f"Team `{team_name}` is already registered to the "
                     f"captain `{team.captain}`"
                 )
 
