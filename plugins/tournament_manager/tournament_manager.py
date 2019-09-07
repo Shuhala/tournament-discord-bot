@@ -1020,7 +1020,7 @@ class TournamentManagerPlugin(BotPlugin):
         self._show_match(msg, tournament, match)
 
     @arg_botcmd("alias", type=str)
-    @private_message_only
+    @tournament_channel_only
     def show_matches(self, msg, alias):
         """
         Show the matches of a tournament.
