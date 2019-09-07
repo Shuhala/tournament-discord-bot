@@ -1406,8 +1406,8 @@ class TournamentManagerPlugin(BotPlugin):
         fields = [
             ("Status", f"{match.status.name}\n"),
             (
-                "Teams Ready",
-                f"{len(match.teams_ready)}/" f"{tournament.count_linked_teams()}\n",
+                "Teams Joined",
+                f"{len(match.teams_joined)}/" f"{tournament.count_linked_teams()}\n",
             ),
             ("Created by", f"{match.created_by}\n"),
         ]

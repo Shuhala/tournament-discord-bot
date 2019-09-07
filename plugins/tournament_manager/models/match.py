@@ -27,7 +27,6 @@ class Match(BaseDataClass):
             "```ldif\n"
             f"Status: {self.status.name}\n"
             f"Teams Joined: {len(self.teams_joined)}\n"
-            f"Teams Ready: {len(self.teams_ready)}\n"
             f"Created by: {self.created_by}\n"
             f"Created at: {self.created_at}\n"
             "```"
