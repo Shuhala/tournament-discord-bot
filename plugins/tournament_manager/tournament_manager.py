@@ -136,7 +136,8 @@ class TournamentManagerPlugin(BotPlugin):
         self.send(
             msg.frm,
             "Commands summary are also available at this link: "
-            "<https://docs.google.com/document/d/1eedLoQdVLVe2JkCe19g69w-UUL49iFW93mz4piypY1k/edit?usp=sharing>",  # noqa
+            "<https://docs.google.com/document/d/1eedLoQdVLVe2JkCe19g69w-UUL49iFW93mz4piypY1k/edit?usp=sharing>",
+            # noqa
         )
 
     @arg_botcmd("role", type=str, nargs="+")
@@ -601,15 +602,16 @@ class TournamentManagerPlugin(BotPlugin):
                 f"Use `!show status` to display information about your team."
             )
 
-    @arg_botcmd("discord_user", type=str)
+    @arg_botcmd("discord_user", type=str, nargs="+")
     @arg_botcmd("team_id", type=int)
     @arg_botcmd("alias", type=str)
     @tournament_admin_only
-    def link_team_captain(self, msg, alias: str, discord_user: str, team_id: int):
+    def link_team_captain(self, msg, alias: str, team_id: int, discord_user: str):
         """
         [Admin] Set a discord user as a team linked captain.
         E.g. `!link team captain fortnite 123456789 user#1234`
         """
+        discord_user = " ".join(discord_user)
         if alias not in self["tournaments"]:
             return "Tournament not found"
 
