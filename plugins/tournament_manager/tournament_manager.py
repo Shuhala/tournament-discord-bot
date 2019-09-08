@@ -1074,7 +1074,7 @@ class TournamentManagerPlugin(BotPlugin):
             return "No score submissions found for this match."
 
         match_scores = sorted(match_scores, key=lambda k: getattr(k, "position"))
-        match_scores_chunk = chunks(match_scores, 75)
+        match_scores_chunk = chunks(match_scores, 25)
 
         for i, chunk in enumerate(match_scores_chunk):
             self.send_card(
