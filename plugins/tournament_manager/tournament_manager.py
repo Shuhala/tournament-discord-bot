@@ -431,7 +431,7 @@ class TournamentManagerPlugin(BotPlugin):
                     )
                     tournaments.update({tournament.alias: tournament.to_dict()})
 
-    @arg_botcmd("match_id", type=int, nargs="?")
+    @arg_botcmd("match_id", type=int)
     @arg_botcmd("password", type=str)
     @arg_botcmd("match_name", type=str)
     @arg_botcmd("alias", type=str)
@@ -439,7 +439,7 @@ class TournamentManagerPlugin(BotPlugin):
     def create_match(self, msg, alias, match_name, password, match_id):
         """
         [Admin] Create a tournament match.
-        E.g. `!create match fortnite match_1 secretPassword`
+        E.g. `!create match fortnite match_1 secretPassword 123456789`
         """
         if alias not in self["tournaments"]:
             return "Tournament not found"
