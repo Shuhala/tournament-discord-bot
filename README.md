@@ -1,27 +1,6 @@
-[![Updates](https://pyup.io/repos/github/gbin/err-backend-discord/shield.svg)](https://pyup.io/repos/github/gbin/err-backend-discord/)
+## Documentation
+[See Tournament Discord Bot commands](https://docs.google.com/document/d/1YAG8q635DSeRuDgBeu2qCAeQKf4nNzFANp_poy2CdbA/edit?usp=sharing)
 
-This is a backend for Discord (http://discordapp.com) for errbot (http://errbot.io).
-
-It allows you to use errbot from Discord but it is a work in progress.
-
-**This project is in need of a regular user of Discord familiar with Python to take it under his/her wing!**
-
-It is Python 3.4+ only.
-
-## Installation
-
-```
-git clone https://github.com/gbin/err-backend-discord.git
-```
-
-and add:
-
-```
-BACKEND = 'Discord'
-BOT_EXTRA_BACKEND_DIR = '/path_to/err-backend-discord'
-```
-
-to your `config.py`
 
 ## Authentication
 
