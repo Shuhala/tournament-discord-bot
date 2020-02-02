@@ -24,7 +24,7 @@ run-prod: build
 
 .PHONY: docker-kill
 docker-kill:
-	@docker kill errbot
+	@docker kill errbot || true
 
 .PHONY: clean
 clean: docker-kill
@@ -33,8 +33,7 @@ clean: docker-kill
 
 .PHONY: lint
 lint: build
-	docker run --rm \
-		-v $$(pwd):/opt/app \
-		discord_bot \
-			black . && \
-			flake8
+	@docker run --rm -v $$(pwd):/opt/app \
+		discord_bot black .
+	@docker run --rm -v $$(pwd):/opt/app \
+		discord_bot flake8

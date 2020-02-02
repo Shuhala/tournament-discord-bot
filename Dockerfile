@@ -1,6 +1,6 @@
 FROM python:3.7.3-slim-stretch
 
-ENV POETRY_VERSION='0.12.16'
+ENV POETRY_VERSION='1.0.3'
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends git gcc python-dev \
@@ -12,7 +12,7 @@ RUN mkdir /opt/app
 WORKDIR /opt/app
 
 COPY pyproject.toml poetry.lock ./
-RUN poetry config settings.virtualenvs.create false && \
+RUN poetry config virtualenvs.create false && \
     poetry install --no-interaction
 
 ENV PYTHONWARNINGS="ignore:Unverified HTTPS request"
