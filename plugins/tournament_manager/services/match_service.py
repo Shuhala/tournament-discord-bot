@@ -2,7 +2,12 @@ from typing import Optional
 
 from plugins.tournament_manager.clients.toornament_api_client import ToornamentAPIClient
 from plugins.tournament_manager.models import Match, MatchStatus
-from plugins.tournament_manager.services.errors import InvalidMatchStatus, MatchIDNotFound
+from plugins.tournament_manager.services.errors import (
+    CantStartMatchWithStatus,
+    InvalidMatchStatus,
+    MatchIDNotFound,
+    GenericError,
+)
 
 
 class MatchService:
@@ -33,10 +38,35 @@ class MatchService:
 
         return match
 
+    def join_match(self, match: Match, team_id: int, team_name: str) -> Match:
+        if match.id and str(team_id) not in match.teams_registered:
+            raise GenericError(
+                f"You are not authorized to join this match (ﾉ°□°)ﾉ ﾐ ┻━┻ !! "
+                f"Team `{team_name}` is not in this match group `{match.group_name}`"
+            )
+        if str(team_id) in match.teams_joined:
+            raise GenericError(f"Team `{team_name}` has already joined this match")
+
+        if match.status != MatchStatus.PENDING:
+            raise GenericError(f"Can't join match with status `{match.status.name}`")
+
+        if str(team_id) not in match.teams_joined:
+            match.teams_joined.append(str(team_id))
+
+        return match
+
     @staticmethod
     def set_match_status(match: Match, status: str) -> Match:
         if not hasattr(MatchStatus, status.upper()):
             raise InvalidMatchStatus(status)
 
         match.status = MatchStatus[status.upper()]
+        return match
+
+    @staticmethod
+    def start_match(match: Match) -> Match:
+        if match.status != MatchStatus.PENDING:
+            raise CantStartMatchWithStatus(match.status.name)
+
+        match.status = MatchStatus.ONGOING
         return match

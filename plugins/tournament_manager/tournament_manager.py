@@ -21,7 +21,6 @@ from plugins.tournament_manager.decorators import (
 from plugins.tournament_manager.models import (
     Match,
     MatchStatus,
-    ScoreSubmission,
     Team,
     Tournament,
 )
@@ -61,105 +60,6 @@ class TournamentManagerPlugin(BotPlugin):
         if "tournaments" not in self:
             self["tournaments"] = {}
 
-    @botcmd
-    @private_message_only
-    def help(self, msg, *args):
-        """ Display bot commands """
-
-        # Sketchy override of the bot help command
-
-        def sanitize_cmd(cmd_text: str):
-            return " ".join(l.strip() for l in cmd_text.split("\n"))
-
-        commands = []
-        linked_commands = []
-        admin_commands = []
-        for cmd_name, cmd in self._bot.commands.items():
-            # Extract command names and descriptions
-            if not hasattr(cmd, "_err_command_parser"):
-                # undocumented
-                description = sanitize_cmd(self._bot.get_doc(cmd))
-                name = cmd_name
-            elif cmd._err_command_parser.description:
-                # use command docstring
-                description = sanitize_cmd(cmd._err_command_parser.description)
-                name = (
-                    cmd_name
-                    + " "
-                    + " ".join(
-                        f"*[{a.dest}]*" for a in cmd._err_command_parser._actions[1:]
-                    )
-                )
-            else:
-                # use argparse syntax
-                description = cmd._err_command_syntax
-                name = (
-                    cmd_name
-                    + " "
-                    + " ".join(
-                        f"*[{a.dest}]*" for a in cmd._err_command_parser._actions[1:]
-                    )
-                )
-
-            if "[ADMIN]" in description.upper():
-                admin_commands.append((name, description))
-            elif "[LINKED]" in description.upper():
-                linked_commands.append((name, description))
-            else:
-                commands.append((name, description))
-
-        # General Commands
-        help_message = (
-            "```General Commands```"
-            "*Bot available commands. "
-            "\nNote: The **[alias]** parameter is the `Tournament Alias` field that can "
-            "be found in the tournaments description. To see available tournaments, "
-            "use `!show tournaments`*"
-            "\n\n"
-        )
-        help_message += "\n\n".join(f"**!{name}**\n{descr}" for name, descr in commands)
-        self.send(msg.frm, help_message)
-
-        # Linked Commands
-        help_message = (
-            f"```Linked Captains Commands```"
-            f"*Commands available to captains linked to a team*\n\n"
-        )
-        help_message += "\n\n".join(
-            f"**!{name}**\n{descr[10:]}" for name, descr in linked_commands
-        )
-        help_message += (
-            "\n\n**!submit *[match_name]* position *[number]* eliminations *[number]***"
-            "\n***THIS COMMAND MUST BE SENT IN PRIVATE TO THE BOT WITH A SCREENSHOT "
-            "ATTACHED TO IT***\n"
-            "Submit your team score for a match. "
-            "E.g. with an attached screenshot, add the message: `!submit game_1 position "
-            "2 eliminations 5` to submit a score where your position is `2`nd and number "
-            "of eliminations `5` for the match named `game_1`.\n"
-            "- Score submission is disabled when a match status is set to COMPLETED.\n"
-            "- If you made a mistake while submitting your score, use this command "
-            "again to override the previous submission for this match.\n"
-            "- The information submitted must match the one visible on your screenshot. "
-            "Submitting a different score than what is displayed on your screenshot "
-            "will result in a sanction.\n"
-        )
-        self.send(msg.frm, help_message)
-
-        # Admin Commands
-        if self._is_tournament_admin(msg.frm):
-            help_message = "```Admin Commands```\n"
-            help_message += "\n\n".join(
-                f"**!{name}**\n{descr[9:]}" for name, descr in admin_commands
-            )
-            self.send(msg.frm, help_message)
-
-        self.send(
-            msg.frm,
-            "Commands summary are also available at this link: "
-            "<https://docs.google.com/document/d/1eedLoQdVLVe2JkCe19g69w-UUL49iFW93mz4piypY1k/edit?usp=sharing>",
-            # noqa
-        )
-
     @arg_botcmd("role", type=str, nargs="+")
     @arg_botcmd("alias", type=str, admin_only=True)
     @tournament_admin_only
@@ -168,9 +68,6 @@ class TournamentManagerPlugin(BotPlugin):
         [Admin] Link a Discord admin role to a tournament.
         E.g. `!add admin role fortnite Fortnite Admin`
         """
-        if alias not in self["tournaments"]:
-            return "Tournament not found."
-
         role = " ".join(role)
         if not self._bot.find_role(role):
             return f"Role `{role}` not found"
@@ -251,175 +148,6 @@ class TournamentManagerPlugin(BotPlugin):
 
         self._save_tournament(alias, tournament)
         self.send(msg.frm, f"Tournament `{tournament.info.name}` successfully added")
-
-    def callback_attachment(self, msg: Message, discord_msg: discord.Message):
-        """ Send screenshots in private message to bot """
-        if hasattr(msg.to, "fullname") and msg.to.fullname == str(self.bot_identifier):
-            cmds = ["!submit", "!add", "!add_screenshot"]
-            msg_parts = msg.body.strip().split(" ")
-
-            if not msg_parts or msg_parts[0] not in cmds:
-                self.send(
-                    msg.frm,
-                    (
-                        "Wow! Thank you so much for this beautiful attachment!\n"
-                        "Unfortunately, I'm unsure what I'm supposed to do with that."
-                        " Are you trying to submit a match score screenshot?\n"
-                        "To submit a score for a match, use: "
-                        "`submit [match_name] position [number] eliminations [number]`.\n"
-                        "To add a screenshot to your previous score submission, use: "
-                        "`!add screenshot [match_name]`.\n"
-                        "To remove a score submission for a match and add a new one, use "
-                        "`!remove score [match_name]`."
-                    ),
-                )
-                return
-
-            with self.mutable("tournaments") as tournaments:
-                team, tournament = self._find_captain_team(msg.frm.fullname, tournaments)
-                if not team:
-                    self.send(msg.frm, "You are not the captain of a team.")
-                    return
-
-                # !submit
-                if msg_parts[0] == "!submit":
-
-                    # invalid format
-                    if len(msg_parts) != 6:
-                        self.send(
-                            msg.frm,
-                            (
-                                "Looks like you're trying to submit your score!\n\n"
-                                "Your screenshot must be followed with the following"
-                                " information: "
-                                "`!submit [match_name] position [number] "
-                                "eliminations [number]`\n"
-                            ),
-                        )
-                        return
-
-                    _, match_name, _, position, _, eliminations = msg_parts
-                    match = tournament.find_match_by_name(match_name)
-
-                    # match not found
-                    if not match:
-                        self.send(
-                            msg.frm,
-                            f"There is no match with the name `{match_name}` for "
-                            f"the `{tournament.alias}` tournament. Can't submit "
-                            f"score.",
-                        )
-                        return
-                    # Team not registered in this game
-                    if match.id and team.id not in match.teams_registered:
-                        self.send(
-                            msg.frm,
-                            "You are not authorized to submit a score for this match, "
-                            f"your team is not registered in this match group "
-                            f"`{match.group_name}`",
-                        )
-                    # invalid entries
-                    if not position.isdigit() or not eliminations.isdigit():
-                        self.send(
-                            msg.frm,
-                            "Invalid entry for position or eliminations. "
-                            "A number was expected.",
-                        )
-                        return
-                    # match completed, submissions locked
-                    if match.status == MatchStatus.COMPLETED:
-                        self.send(
-                            msg.frm,
-                            f"Can't submit score for the match `{match_name}`. "
-                            f"Match status is set to COMPLETED. "
-                            f"Submissions are now locked. "
-                            f"Please contact your Tournament Administrator.",
-                        )
-                        return
-                    # score already submitted
-                    score = team.find_submission_by_match(match_name)
-                    if score:
-                        self.send(
-                            msg.frm,
-                            f"Score for the match `{match_name}` already submitted.\n"
-                            f"Use `!remove score [match_name]` if you want to submit "
-                            f"a different score, or `!add screenshot [match_name]` to "
-                            f"add a screenshot to your submission.",
-                        )
-                        return
-
-                    # add score
-                    score = ScoreSubmission(
-                        match_name=match_name,
-                        team_name=team.name,
-                        screenshot_links=[a.url for a in discord_msg.attachments],
-                        position=int(position),
-                        eliminations=int(eliminations),
-                    )
-                    team.score_submissions.append(score)
-                    self.send(
-                        msg.frm,
-                        "Score successfully added! Type `!show scores` "
-                        "to see your score submissions history.",
-                    )
-                    tournaments.update({tournament.alias: tournament.to_dict()})
-
-                # add screenshot
-                elif (msg_parts[0] == "!add" and msg_parts[1] == "screenshot") or (
-                    msg_parts[0] == "!add_screenshot"
-                ):
-                    if len(msg_parts) == 3:
-                        match_name = msg_parts[2]
-                    elif len(msg_parts) == 2:
-                        match_name = msg_parts[1]
-                    else:
-                        self.send(
-                            msg.frm,
-                            "Invalid command format. Use `!add screenshot [match_name]`",
-                        )
-                        return
-
-                    match = tournament.find_match_by_name(match_name)
-
-                    # match not found
-                    if not match:
-                        self.send(
-                            msg.frm,
-                            f"There is no match with the name `{match_name}` for "
-                            f"the `{tournament.alias}` tournament. Can't submit "
-                            f"score.",
-                        )
-                        return
-                    # match completed, submissions locked
-                    if match.status == MatchStatus.COMPLETED:
-                        self.send(
-                            msg.frm,
-                            f"Can't submit score for the match `{match_name}`. "
-                            f"Match status is set to COMPLETED. "
-                            f"Submissions are now locked. "
-                            f"Please contact your Tournament Administrator.",
-                        )
-                        return
-
-                    # update score
-                    score = team.find_submission_by_match(match_name)
-                    if not score:
-                        self.send(
-                            msg.frm,
-                            f"No score submission found for the match `{match_name}`. "
-                            "Use `!submit [match_name] position [number] "
-                            "eliminations [number]` to submit your score.\n",
-                        )
-                    score.screenshot_links.extend(
-                        [a.url for a in discord_msg.attachments]
-                    )
-                    score.updated_at = datetime.now().strftime("%m/%d/%Y %H:%M:%S")
-                    self.send(
-                        msg.frm,
-                        "Score successfully updated! Type `!show score history` "
-                        "to see your score submissions history.",
-                    )
-                    tournaments.update({tournament.alias: tournament.to_dict()})
 
     @arg_botcmd("match_id", type=int, nargs="?")
     @arg_botcmd("password", type=str)
@@ -514,35 +242,21 @@ class TournamentManagerPlugin(BotPlugin):
         [Linked] Join a match.
         E.g. `!join match_1`
         """
-        with self.mutable("tournaments") as tournaments:
-            team, tournament = self._find_captain_team(msg.frm.fullname, tournaments)
-            if not team:
-                return "You are not a team captain."
-
-            match = tournament.find_match_by_name(match_name)
-            if not match:
-                return "Match not found"
-
-            if match.id and team.id not in match.teams_registered:
-                return (
-                    f"You are not authorized to join this match (ﾉ°□°)ﾉ ﾐ ┻━┻ !! "
-                    f"Team `{team.name}` is not in this match group `{match.group_name}`"
-                )
-
-            if team.id in match.teams_joined:
-                return f"Team `{team.name}` has already joined this match"
-
-            if match.status != MatchStatus.PENDING:
-                return f"Can't join match with status `{match.status.name}`"
-
-            match.teams_joined.append(team.id)
-
-            # Save tournament changes to db
-            tournaments.update({tournament.alias: tournament.to_dict()})
-            self.send(
-                msg.frm, f"Team `{team.name}` is now ready for the match {match.name}!"
+        try:
+            captain_name = msg.frm.fullname
+            alias = self.tournament_service.get_captain_tournament_alias(
+                self["tournaments"], captain_name
             )
-            self._show_match(msg, tournament, match)
+
+            with update_tournament(self, alias) as tournament:
+                match = self.tournament_service.get_match_by_name(tournament, match_name)
+                team = self.tournament_service.get_captain_team(tournament, captain_name)
+                match = self.match_service.join_match(match, int(team.id), team.name)
+        except AppError as err:
+            return err
+
+        self.send(msg.frm, f"Team `{team.name}` is now ready for the match {match.name}!")
+        self._show_match(msg, tournament, match)
 
     @arg_botcmd("match_name", type=str)
     @tournament_channel_only
@@ -582,45 +296,30 @@ class TournamentManagerPlugin(BotPlugin):
         If there is a quote (`'` or `"`) in your team name, add a backslash before: `\"`
         E.g. `!link fortnite Team Liquid`
         """
-        if alias not in self["tournaments"]:
-            return "Tournament not found"
-
         team_name = " ".join(team_name)
-        with self.mutable("tournaments") as tournaments:
-            team, tournament = self._find_captain_team(msg.frm.fullname, tournaments)
-            if team:
-                if team.name == team_name:
-                    return "You are already linked to this team"
-                return (
-                    "You can't be the captain of more than one team.\n"
-                    f"You are currently the captain of the team `{team.name}` for the "
-                    f"tournament {tournament.name}"
-                )
 
-            tournament = Tournament.from_dict(tournaments[alias])
-            team = tournament.find_team_by_name(team_name)
-            if not team:
-                return (
-                    f"Team `{team_name}` not found in the tournament `{tournament.alias}`"
-                )
-
-            if team.captain is not None:
-                return (
-                    f"Team `{team_name}` is already registered to the "
-                    f"captain `{team.captain}`"
-                )
-
-            team.captain = msg.frm.fullname
-
-            # Save tournament changes to db
-            tournaments.update({alias: tournament.to_dict()})
-
-            self._add_discord_team_captain(msg.frm, team_name, tournament.captain_role)
-
+        team, tournament = self._find_captain_team(msg.frm.fullname, self["tournaments"])
+        if team:
             return (
-                f"You are now the captain of the team `{team_name}`. "
-                f"Use `!show status` in private to display information about your team."
+                f"You are currently the captain of the team `{team.name}` for the "
+                f"tournament `{alias}`"
             )
+
+        try:
+            with update_tournament(self, alias) as tournament:
+                team = self.tournament_service.link_team_captain(
+                    tournament, team_name, msg.frm.fullname,
+                )
+                self._add_discord_team_captain(
+                    msg.frm, team_name, tournament.captain_role
+                )
+        except AppError as err:
+            return err
+
+        return (
+            f"You are now the captain of the team `{team_name}`. "
+            f"Use `!show status` in private to display information about your team."
+        )
 
     @arg_botcmd("discord_user", type=str, nargs="+")
     @arg_botcmd("team_id", type=int)
@@ -632,36 +331,27 @@ class TournamentManagerPlugin(BotPlugin):
         E.g. `!link team captain fortnite 123456789 user#1234`
         """
         discord_user = " ".join(discord_user)
-        if alias not in self["tournaments"]:
-            return "Tournament not found"
-
         try:
             user = self.build_identifier(discord_user)
-        except Exception:
+        except ValueError:
             return f"User `{discord_user}` not found."
 
         if self._find_captain_team(discord_user, self["tournaments"])[0]:
             return f"User `{discord_user}` is already the captain of a team."
 
-        with self.mutable("tournaments") as tournaments:
-            tournament = Tournament.from_dict(tournaments[alias])
-            team = tournament.find_team_by_id(team_id)
-            if not team:
-                return (
-                    f"Team `{team_id}` not found in the tournament `{tournament.alias}`"
-                )
+        try:
+            with update_tournament(self, alias) as tournament:
+                team = self.tournament_service.get_team_by_id(tournament, team_id)
+                if team.captain:
+                    self._remove_discord_team_captain(
+                        self.build_identifier(team.captain), tournament.captain_role
+                    )
+                team.captain = discord_user
+                self._add_discord_team_captain(user, team.name, tournament.captain_role)
+        except AppError as err:
+            return err
 
-            if team.captain:
-                self._remove_discord_team_captain(
-                    self.build_identifier(team.captain), tournament.captain_role
-                )
-
-            team.captain = discord_user
-            self._add_discord_team_captain(user, team.name, tournament.captain_role)
-
-            # Save tournament changes to db
-            tournaments.update({alias: tournament.to_dict()})
-            return f"Team `{team.name}` captain successfully linked to `{discord_user}`."
+        return f"Team `{team.name}` captain successfully linked to `{discord_user}`."
 
     @arg_botcmd("alias", type=str)
     @tournament_admin_only
@@ -1176,32 +866,27 @@ class TournamentManagerPlugin(BotPlugin):
         if alias not in self["tournaments"]:
             return "Tournament not found"
 
-        with self.mutable("tournaments") as tournaments:
-            tournament = Tournament.from_dict(tournaments[alias])
-            match = tournament.find_match_by_name(match_name)
-            if not match:
-                return "Match not found"
-            if match.status != MatchStatus.PENDING:
-                return f"Can't start match with status `{match.status.name}`"
+        try:
+            with update_tournament(self, alias) as tournament:
+                match = self.tournament_service.get_match_by_name(tournament, match_name)
+                match = self.match_service.start_match(match)
 
-            for channel in tournament.channels:
-                room = self.query_room(channel)
-                self.send(room, f"The match `{match_name}` will start in ~30 seconds!")
+                for channel in tournament.channels:
+                    room = self.query_room(channel)
+                    self.send(room, f"The match `{match_name}` will start in ~30 seconds")
 
-            for team_id in match.teams_joined:
-                team = tournament.find_team_by_id(team_id)
-                captain_user = self.build_identifier(team.captain)
-                self.send(
-                    captain_user,
-                    f"The match `{match_name}` for the team `{team.name}` "
-                    f"will start in ~30 seconds!",
-                )
+                for team_id in match.teams_joined:
+                    team = tournament.find_team_by_id(team_id)
+                    captain_user = self.build_identifier(team.captain)
+                    self.send(
+                        captain_user,
+                        f"The match `{match_name}` for the team `{team.name}` "
+                        f"will start in ~30 seconds!",
+                    )
+        except AppError as err:
+            return err
 
-            match.status = MatchStatus.ONGOING
-
-            # Save tournament changes to db
-            tournaments.update({alias: tournament.to_dict()})
-            self.send(msg.frm, f"Match `{match_name}` status set to ONGOING.")
+        self.send(msg.frm, f"Match `{match_name}` status set to ONGOING.")
 
     @arg_botcmd("team_name", type=str, nargs="+")
     @tournament_channel_only
@@ -1230,6 +915,217 @@ class TournamentManagerPlugin(BotPlugin):
             tournaments.update({tournament.alias: tournament.to_dict()})
             self._remove_discord_team_captain(msg.frm, tournament.captain_role)
             return f"You are no longer the captain of the team `{team_name}`."
+
+    def callback_attachment(self, msg: Message, discord_msg: discord.Message):
+        """ Send screenshots in private message to bot """
+        if hasattr(msg.to, "fullname") and msg.to.fullname == str(self.bot_identifier):
+            cmds = ["!submit", "!add", "!add_screenshot"]
+            msg_parts = msg.body.strip().split(" ")
+
+            if not msg_parts or msg_parts[0] not in cmds:
+                self.send(
+                    msg.frm,
+                    (
+                        "Wow! Thank you so much for this beautiful attachment!\n"
+                        "Unfortunately, I'm unsure what I'm supposed to do with that."
+                        " Are you trying to submit a match score screenshot?\n"
+                        "To submit a score for a match, use: "
+                        "`submit [match_name] position [number] eliminations [number]`.\n"
+                        "To add a screenshot to your previous score submission, use: "
+                        "`!add screenshot [match_name]`.\n"
+                        "To remove a score submission for a match and add a new one, use "
+                        "`!remove score [match_name]`."
+                    ),
+                )
+                return
+
+            # !submit
+            if msg_parts[0] == "!submit":
+                # validate format
+                if len(msg_parts) != 6:
+                    self.send(
+                        msg.frm,
+                        (
+                            "Looks like you're trying to submit your score!\n\n"
+                            "Your screenshot must be followed with the following"
+                            " information: "
+                            "`!submit [match_name] position [number] "
+                            "eliminations [number]`\n"
+                        ),
+                    )
+                    return
+                _, match_name, _, position, _, eliminations = msg_parts
+                # invalid entries
+                if not position.isdigit() or not eliminations.isdigit():
+                    self.send(
+                        msg.frm,
+                        "Invalid entry for position or eliminations. "
+                        "A number was expected.",
+                    )
+                    return
+
+                try:
+                    alias = self.tournament_service.get_captain_tournament_alias(
+                        self["tournaments"], msg.frm.fullname
+                    )
+                    with update_tournament(self, alias) as tournament:
+                        team = self.tournament_service.get_captain_team(
+                            tournament, msg.frm.fullname
+                        )
+                        self.tournament_service.submit_score(
+                            tournament=tournament,
+                            match_name=match_name,
+                            team_id=int(team.id),
+                            urls=[a.url for a in discord_msg.attachments],
+                            position=int(position),
+                            eliminations=int(eliminations),
+                        )
+                except AppError as err:
+                    self.send(msg.frm, str(err))
+                    return
+
+                self.send(
+                    msg.frm,
+                    "Score successfully added! Type `!show scores` "
+                    "to see your score submissions history.",
+                )
+            # add screenshot
+            elif (msg_parts[0] == "!add" and msg_parts[1] == "screenshot") or (
+                msg_parts[0] == "!add_screenshot"
+            ):
+                if len(msg_parts) == 3:
+                    match_name = msg_parts[2]
+                elif len(msg_parts) == 2:
+                    match_name = msg_parts[1]
+                else:
+                    self.send(
+                        msg.frm,
+                        "Invalid command format. Use `!add screenshot [match_name]`",
+                    )
+                    return
+
+                try:
+                    alias = self.tournament_service.get_captain_tournament_alias(
+                        self["tournaments"], msg.frm.fullname
+                    )
+                    with update_tournament(self, alias) as tournament:
+                        team = self.tournament_service.get_captain_team(
+                            tournament, msg.frm.fullname
+                        )
+                        self.tournament_service.add_screenshot(
+                            tournament=tournament,
+                            match_name=match_name,
+                            team_id=int(team.id),
+                            urls=[a.url for a in discord_msg.attachments],
+                        )
+                except AppError as err:
+                    self.send(msg.frm, str(err))
+                    return
+
+                self.send(
+                    msg.frm,
+                    "Score successfully updated! Type `!show scores` "
+                    "to see your score submissions history.",
+                )
+
+    @botcmd
+    @private_message_only
+    def help(self, msg, *args):
+        """ Display bot commands """
+
+        # Sketchy override of the bot help command
+
+        def sanitize_cmd(cmd_text: str):
+            return " ".join(l.strip() for l in cmd_text.split("\n"))
+
+        commands = []
+        linked_commands = []
+        admin_commands = []
+        for cmd_name, cmd in self._bot.commands.items():
+            # Extract command names and descriptions
+            if not hasattr(cmd, "_err_command_parser"):
+                # undocumented
+                description = sanitize_cmd(self._bot.get_doc(cmd))
+                name = cmd_name
+            elif cmd._err_command_parser.description:
+                # use command docstring
+                description = sanitize_cmd(cmd._err_command_parser.description)
+                name = (
+                    cmd_name
+                    + " "
+                    + " ".join(
+                        f"*[{a.dest}]*" for a in cmd._err_command_parser._actions[1:]
+                    )
+                )
+            else:
+                # use argparse syntax
+                description = cmd._err_command_syntax
+                name = (
+                    cmd_name
+                    + " "
+                    + " ".join(
+                        f"*[{a.dest}]*" for a in cmd._err_command_parser._actions[1:]
+                    )
+                )
+
+            if "[ADMIN]" in description.upper():
+                admin_commands.append((name, description))
+            elif "[LINKED]" in description.upper():
+                linked_commands.append((name, description))
+            else:
+                commands.append((name, description))
+
+        # General Commands
+        help_message = (
+            "```General Commands```"
+            "*Bot available commands. "
+            "\nNote: The **[alias]** parameter is the `Tournament Alias` field that can "
+            "be found in the tournaments description. To see available tournaments, "
+            "use `!show tournaments`*"
+            "\n\n"
+        )
+        help_message += "\n\n".join(f"**!{name}**\n{descr}" for name, descr in commands)
+        self.send(msg.frm, help_message)
+
+        # Linked Commands
+        help_message = (
+            f"```Linked Captains Commands```"
+            f"*Commands available to captains linked to a team*\n\n"
+        )
+        help_message += "\n\n".join(
+            f"**!{name}**\n{descr[10:]}" for name, descr in linked_commands
+        )
+        help_message += (
+            "\n\n**!submit *[match_name]* position *[number]* eliminations *[number]***"
+            "\n***THIS COMMAND MUST BE SENT IN PRIVATE TO THE BOT WITH A SCREENSHOT "
+            "ATTACHED TO IT***\n"
+            "Submit your team score for a match. "
+            "E.g. with an attached screenshot, add the message: `!submit game_1 position "
+            "2 eliminations 5` to submit a score where your position is `2`nd and number "
+            "of eliminations `5` for the match named `game_1`.\n"
+            "- Score submission is disabled when a match status is set to COMPLETED.\n"
+            "- If you made a mistake while submitting your score, use this command "
+            "again to override the previous submission for this match.\n"
+            "- The information submitted must match the one visible on your screenshot. "
+            "Submitting a different score than what is displayed on your screenshot "
+            "will result in a sanction.\n"
+        )
+        self.send(msg.frm, help_message)
+
+        # Admin Commands
+        if self._is_tournament_admin(msg.frm):
+            help_message = "```Admin Commands```\n"
+            help_message += "\n\n".join(
+                f"**!{name}**\n{descr[9:]}" for name, descr in admin_commands
+            )
+            self.send(msg.frm, help_message)
+
+        self.send(
+            msg.frm,
+            "Commands summary are also available at this link: "
+            "<https://docs.google.com/document/d/1eedLoQdVLVe2JkCe19g69w-UUL49iFW93mz4piypY1k/edit?usp=sharing>",
+            # noqa
+        )
 
     @staticmethod
     def _add_discord_team_captain(

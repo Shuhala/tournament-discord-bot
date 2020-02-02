@@ -37,3 +37,9 @@ lint: build
 		discord_bot black .
 	@docker run --rm -v $$(pwd):/opt/app \
 		discord_bot flake8
+
+.PHONY: run-tests
+run-tests: build
+	@docker run --rm -v $$(pwd):/opt/app \
+		discord_bot \
+			python -m unittest -v
