@@ -24,7 +24,7 @@ from plugins.tournament_manager.models import (
     Team,
     Tournament,
 )
-from plugins.tournament_manager.services.errors import AppError, TournamentNotFound
+from plugins.tournament_manager.errors import AppError, TournamentNotFound
 from plugins.tournament_manager.services.match_service import MatchService
 from plugins.tournament_manager.services.tournament_service import TournamentService
 from plugins.tournament_manager.utils.chunks import chunks
@@ -401,9 +401,6 @@ class TournamentManagerPlugin(BotPlugin):
         [Admin] Remove a Discord admin role from a tournament.
         E.g. `!remove admin role fortnite Fortnite Admin`
         """
-        if alias not in self["tournaments"]:
-            return "Tournament not found."
-
         role = " ".join(role)
         try:
             with update_tournament(self, alias) as tournament:

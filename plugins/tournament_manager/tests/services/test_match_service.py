@@ -2,7 +2,7 @@ from unittest import TestCase
 from unittest.mock import Mock
 
 from ...models import Match, MatchStatus
-from ...services.errors import GenericError
+from plugins.tournament_manager.errors import GenericError
 from ...services.match_service import MatchService
 
 

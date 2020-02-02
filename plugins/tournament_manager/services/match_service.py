@@ -2,7 +2,7 @@ from typing import Optional
 
 from plugins.tournament_manager.clients.toornament_api_client import ToornamentAPIClient
 from plugins.tournament_manager.models import Match, MatchStatus
-from plugins.tournament_manager.services.errors import (
+from plugins.tournament_manager.errors import (
     CantStartMatchWithStatus,
     InvalidMatchStatus,
     MatchIDNotFound,

@@ -11,7 +11,7 @@ from plugins.tournament_manager.models import (
     MatchStatus,
     ScoreSubmission,
 )
-from plugins.tournament_manager.services.errors import (
+from plugins.tournament_manager.errors import (
     ErrorFetchingParticipantData,
     TournamentChannelExists,
     TournamentChannelNotFound,

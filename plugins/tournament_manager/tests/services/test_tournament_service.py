@@ -4,7 +4,7 @@ from unittest.mock import Mock
 from plugins.tournament_manager.services.tournament_service import TournamentService
 from ..utils import load_resource
 from ...models import Tournament, Player, Match
-from ...services.errors import (
+from plugins.tournament_manager.errors import (
     TournamentTeamIDNotFound,
     ErrorFetchingParticipantData,
     TournamentRoleNotFound,
