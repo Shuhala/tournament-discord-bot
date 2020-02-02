@@ -1,9 +1,21 @@
+from typing import Optional
+
 from plugins.tournament_manager.clients.toornament_api_client import ToornamentAPIClient
-from plugins.tournament_manager.models import Tournament, ToornamentInfo, Team, Player
+from plugins.tournament_manager.models import (
+    Match,
+    Player,
+    Team,
+    ToornamentInfo,
+    Tournament,
+)
 from plugins.tournament_manager.services.errors import (
-    TournamentIDNotFound,
-    TournamentTeamIDNotFound,
     ErrorFetchingParticipantData,
+    TournamentChannelExists,
+    TournamentChannelNotFound,
+    TournamentIDNotFound,
+    TournamentMatchNameNotFound,
+    TournamentRoleNotFound,
+    TournamentTeamIDNotFound,
 )
 
 
@@ -70,6 +82,56 @@ class TournamentService:
         team.checked_in = participant.get("checked_in")
 
         return team
+
+    @staticmethod
+    def remove_admin_role(tournament: Tournament, role: str) -> Tournament:
+        if role not in tournament.administrator_roles:
+            raise TournamentRoleNotFound(role)
+        tournament.administrator_roles.remove(role)
+        return tournament
+
+    @staticmethod
+    def remove_captain_role(tournament: Tournament) -> Tournament:
+        tournament.captain_role = None
+        return tournament
+
+    def remove_match(self, tournament: Tournament, match_name: str) -> Tournament:
+        match = self.get_match_by_name(tournament, match_name)
+        tournament.matches.remove(match)
+        return tournament
+
+    @staticmethod
+    def remove_channel(tournament, channel) -> Tournament:
+        if channel not in tournament.channels:
+            raise TournamentChannelNotFound(channel)
+        tournament.channels.remove(channel)
+        return tournament
+
+    @staticmethod
+    def add_channel(tournament: Tournament, channel: str) -> Tournament:
+        if channel in tournament.channels:
+            raise TournamentChannelExists(channel, tournament)
+        tournament.channels.append(channel)
+        return tournament
+
+    @staticmethod
+    def find_match_by_name(tournament: Tournament, match_name: str) -> Optional[Match]:
+        for match in tournament.matches:
+            if match.name == match_name:
+                return match
+        return None
+
+    def get_match_by_name(self, tournament: Tournament, match_name: str) -> Match:
+        match = self.find_match_by_name(tournament, match_name)
+        if not match:
+            raise TournamentMatchNameNotFound(match_name)
+
+        return match
+
+    @staticmethod
+    def set_captain_role(tournament: Tournament, role: str) -> Tournament:
+        tournament.captain_role = role
+        return tournament
 
     @staticmethod
     def remove_tournament_team(tournament: Tournament, team_id: int) -> Team:

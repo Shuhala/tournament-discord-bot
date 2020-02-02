@@ -3,19 +3,20 @@ import itertools
 import logging
 import os
 import tempfile
+from contextlib import contextmanager
 from datetime import datetime
 from time import sleep
-from typing import Optional, List, Tuple
+from typing import List, Optional, Tuple
 
 import discord
-from errbot import BotPlugin, botcmd, Message, arg_botcmd
+from errbot import BotPlugin, Message, arg_botcmd, botcmd
 
 from backends.discord.discord import DiscordPerson
 from plugins.tournament_manager.clients.toornament_api_client import ToornamentAPIClient
 from plugins.tournament_manager.decorators import (
     private_message_only,
-    tournament_channel_only,
     tournament_admin_only,
+    tournament_channel_only,
 )
 from plugins.tournament_manager.models import (
     Match,
@@ -24,11 +25,25 @@ from plugins.tournament_manager.models import (
     Team,
     Tournament,
 )
-from plugins.tournament_manager.services.errors import AppError
+from plugins.tournament_manager.services.errors import AppError, TournamentNotFound
+from plugins.tournament_manager.services.match_service import MatchService
 from plugins.tournament_manager.services.tournament_service import TournamentService
 from plugins.tournament_manager.utils.chunks import chunks
 
 logger = logging.getLogger(__name__)
+
+
+@contextmanager
+def update_tournament(tournament_manager_plugin, alias):
+    """ Get a TournamentManagerPlugin tournament, update and save """
+    if alias not in tournament_manager_plugin["tournaments"]:
+        raise TournamentNotFound(alias)
+    tournament = Tournament.from_dict(tournament_manager_plugin["tournaments"][alias])
+
+    yield tournament
+
+    with tournament_manager_plugin.mutable("tournaments") as tournaments:
+        tournaments.update({alias: tournament.to_dict()})
 
 
 class TournamentManagerPlugin(BotPlugin):
@@ -38,6 +53,7 @@ class TournamentManagerPlugin(BotPlugin):
         super().__init__(*args, **kwargs)
         self.toornament_api_client = ToornamentAPIClient()
         self.tournament_service = TournamentService(self.toornament_api_client)
+        self.match_service = MatchService(self.toornament_api_client)
 
     def activate(self):
         """ Triggers on plugin activation """
@@ -159,22 +175,20 @@ class TournamentManagerPlugin(BotPlugin):
         if not self._bot.find_role(role):
             return f"Role `{role}` not found"
 
-        with self.mutable("tournaments") as tournaments:
-            tournament = Tournament.from_dict(tournaments[alias])
+        try:
+            with update_tournament(self, alias) as tournament:
+                if role in tournament.administrator_roles:
+                    return (
+                        f"Role `{role}` is already a tournament administrator role "
+                        f"of `{tournament.alias}`"
+                    )
+                tournament.administrator_roles.append(role)
+        except AppError as err:
+            return err
 
-            if role in tournament.administrator_roles:
-                return (
-                    f"Role `{role}` is already a tournament administrator role "
-                    f"of `{tournament.alias}`"
-                )
-            tournament.administrator_roles.append(role)
-
-            # Save tournament changes to db
-            tournaments.update({alias: tournament.to_dict()})
-            return (
-                f"Role `{role}` successfully added "
-                f"to the tournament `{tournament.alias}`"
-            )
+        return (
+            f"Role `{role}` successfully added " f"to the tournament `{tournament.alias}`"
+        )
 
     @arg_botcmd("role", type=str, nargs="+")
     @arg_botcmd("alias", type=str)
@@ -186,23 +200,20 @@ class TournamentManagerPlugin(BotPlugin):
         will also be assigned the Captain role.
         E.g. `!add captain fortnite Fortnite Captain`
         """
-        if alias not in self["tournaments"]:
-            return "Tournament not found."
-
         role = " ".join(role)
         if not self._bot.find_role(role):
             return f"Role `{role}` not found"
 
-        with self.mutable("tournaments") as tournaments:
-            tournament = Tournament.from_dict(tournaments[alias])
-            tournament.captain_role = role
+        try:
+            with update_tournament(self, alias) as tournament:
+                self.tournament_service.set_captain_role(tournament, role)
+        except AppError as err:
+            return err
 
-            # Save tournament changes to db
-            tournaments.update({alias: tournament.to_dict()})
-            return (
-                f"Captain role `{role}` successfully added "
-                f"to the tournament `{tournament.alias}`"
-            )
+        return (
+            f"Captain role `{role}` successfully added "
+            f"to the tournament `{tournament.alias}`"
+        )
 
     @arg_botcmd("channel", type=str)
     @arg_botcmd("alias", type=str)
@@ -212,25 +223,16 @@ class TournamentManagerPlugin(BotPlugin):
         [Admin] Link a Discord channel to a tournament.
         E.g. `!add channel fortnite #fortnite-tournament`
         """
-        if alias not in self["tournaments"]:
-            return "Tournament not found."
-
         if not self.query_room(channel):
             return "Invalid channel name"
 
-        with self.mutable("tournaments") as tournaments:
-            tournament = Tournament.from_dict(tournaments[alias])
+        try:
+            with update_tournament(self, alias) as tournament:
+                self.tournament_service.add_channel(tournament, channel)
+        except AppError as err:
+            return err
 
-            if channel in tournament.channels:
-                return (
-                    f"Channel `{channel}` is already set for the tournament "
-                    f"`{tournament.alias}`"
-                )
-            tournament.channels.append(channel)
-
-            # Save tournament changes to db
-            tournaments.update({alias: tournament.to_dict()})
-            return f"Channels successfully added to the tournament"
+        return f"Channels successfully added to the tournament"
 
     @arg_botcmd("tournament_id", type=int)
     @arg_botcmd("alias", type=str, admin_only=True)
@@ -419,7 +421,7 @@ class TournamentManagerPlugin(BotPlugin):
                     )
                     tournaments.update({tournament.alias: tournament.to_dict()})
 
-    @arg_botcmd("match_id", type=int)
+    @arg_botcmd("match_id", type=int, nargs="?")
     @arg_botcmd("password", type=str)
     @arg_botcmd("match_name", type=str)
     @arg_botcmd("alias", type=str)
@@ -429,37 +431,25 @@ class TournamentManagerPlugin(BotPlugin):
         [Admin] Create a tournament match.
         E.g. `!create match fortnite match_1 secretPassword 123456789`
         """
-        if alias not in self["tournaments"]:
-            return "Tournament not found"
+        try:
+            with update_tournament(self, alias) as tournament:
+                match = self.tournament_service.find_match_by_name(tournament, match_name)
+                if match:
+                    return "Match name already exists"
 
-        with self.mutable("tournaments") as tournaments:
-            tournament = Tournament.from_dict(tournaments[alias])
-            match = tournament.find_match_by_name(match_name)
-            if match:
-                return "Match name already exists"
+                match = self.match_service.create_match(
+                    tournament_id=tournament.id,
+                    match_id=match_id,
+                    match_name=match_name,
+                    created_by=msg.frm.fullname,
+                    password=password,
+                )
+                tournament.matches.append(match)
+        except AppError as err:
+            return err
 
-            match = Match(
-                id=match_id,
-                name=match_name,
-                created_by=msg.frm.fullname,
-                password=password,
-            )
-
-            if match_id:
-                match_info = self.toornament_api_client.get_match(tournament.id, match_id)
-                if not match_info:
-                    return f"Match id `{match_id}` not found"
-                match.group_name = match_info["public_notes"]
-                match.teams_registered = [
-                    p["participant"]["id"] for p in match_info["opponents"]
-                ]
-
-            tournament.matches.append(match)
-            # Save tournament changes to db
-            tournaments.update({alias: tournament.to_dict()})
-
-            self.send(msg.frm, f"Match `{match_name}` successfully created.")
-            self._show_match(msg, tournament, match)
+        self.send(msg.frm, f"Match `{match_name}` successfully created.")
+        self._show_match(msg, tournament, match)
 
     @arg_botcmd("match_name", type=str)
     @arg_botcmd("alias", type=str)
@@ -516,34 +506,6 @@ class TournamentManagerPlugin(BotPlugin):
             return f"Error: {e}"
         finally:
             os.remove(path)
-
-    @arg_botcmd("--force", "-f", action="store_true")
-    @arg_botcmd("match_name", type=str)
-    @arg_botcmd("alias", type=str)
-    @tournament_admin_only
-    def end_match(self, msg, alias: str, match_name: str, force: bool):
-        """
-        [Admin] Set a tournament match status as completed. Players won't be able
-        to update or send new score submissions for this match.
-        E.g. `!end match fortnite match_1` or `!end match fortnite match_1 --force` to
-        force to end the match what ever the match status is.
-        """
-        if alias not in self["tournaments"]:
-            return "Tournament not found"
-
-        with self.mutable("tournaments") as tournaments:
-            tournament = Tournament.from_dict(tournaments[alias])
-            match = tournament.find_match_by_name(match_name)
-            if not match:
-                return "Match not found"
-            if match.status != MatchStatus.ONGOING and not force:
-                return f"Can't end match with status `{match.status.name}`"
-
-            match.status = MatchStatus.COMPLETED
-
-            # Save tournament changes to db
-            tournaments.update({alias: tournament.to_dict()})
-            return self.send(msg.frm, f"Match `{match_name}` status set to COMPLETED.")
 
     @arg_botcmd("match_name", type=str)
     @tournament_channel_only
@@ -708,16 +670,12 @@ class TournamentManagerPlugin(BotPlugin):
         [Admin] Refresh a tournament's information.
         E.g. `!refresh tournament fortnite`
         """
-        if alias not in self["tournaments"]:
-            return "Tournament not found"
-        tournament = self._get_tournament(alias)
-
         try:
-            tournament = self.tournament_service.refresh_tournament(tournament)
+            with update_tournament(self, alias) as tournament:
+                tournament = self.tournament_service.refresh_tournament(tournament)
         except AppError as err:
             return err
 
-        self._save_tournament(alias, tournament)
         return f"Tournament {tournament.alias} successfully refreshed."
 
     @arg_botcmd("alias", type=str)
@@ -757,34 +715,28 @@ class TournamentManagerPlugin(BotPlugin):
             return "Tournament not found."
 
         role = " ".join(role)
-        with self.mutable("tournaments") as tournaments:
-            tournament = Tournament.from_dict(tournaments[alias])
+        try:
+            with update_tournament(self, alias) as tournament:
+                self.tournament_service.remove_admin_role(tournament, role)
+        except AppError as err:
+            return err
 
-            if role not in tournament.administrator_roles:
-                return f"Role `{role.name}` is not a role of `{tournament.alias}`"
-            tournament.administrator_roles.remove(role.name)
-
-            # Save tournament changes to db
-            tournaments.update({alias: tournament.to_dict()})
-            return f"Roles successfully removed from the tournament `{tournament.alias}`"
+        return f"Roles successfully removed from the tournament `{tournament.alias}`"
 
     @arg_botcmd("alias", type=str)
     @tournament_admin_only
     def remove_captain_role(self, msg, alias):
         """ [Admin] Remove a tournament Discord Captain Role """
-        if alias not in self["tournaments"]:
-            return "Tournament not found."
+        try:
+            with update_tournament(self, alias) as tournament:
+                tournament = self.tournament_service.remove_captain_role(tournament)
+        except AppError as err:
+            return err
 
-        with self.mutable("tournaments") as tournaments:
-            tournament = Tournament.from_dict(tournaments[alias])
-            tournament.captain_role = None
-
-            # Save tournament changes to db
-            tournaments.update({alias: tournament.to_dict()})
-            return (
-                f"Captain Role successfully removed for "
-                f"the tournament `{tournament.alias}`"
-            )
+        return (
+            f"Captain Role successfully removed for "
+            f"the tournament `{tournament.alias}`"
+        )
 
     @arg_botcmd("channel", type=str)
     @arg_botcmd("alias", type=str)
@@ -794,21 +746,13 @@ class TournamentManagerPlugin(BotPlugin):
         [Admin] Remove a linked Discord channel from a tournament.
         E.g. !remove channel fornite #fortnite-tournament
         """
-        if alias not in self["tournaments"]:
-            return "Tournament not found."
+        try:
+            with update_tournament(self, alias) as tournament:
+                tournament = self.tournament_service.remove_channel(tournament, channel)
+        except AppError as err:
+            return err
 
-        with self.mutable("tournaments") as tournaments:
-            tournament = Tournament.from_dict(tournaments[alias])
-            if channel not in tournament.channels:
-                return (
-                    f"Channel `{channel}` doesn't exists for the tournament "
-                    f"`{tournament.alias}`"
-                )
-            tournament.channels.remove(channel)
-
-            # Save tournament changes to db
-            tournaments.update({alias: tournament.to_dict()})
-            return f"Channels successfully removed from the tournament"
+        return f"Channels successfully removed from the tournament"
 
     @arg_botcmd("match_name", type=str)
     @arg_botcmd("alias", type=str)
@@ -818,20 +762,13 @@ class TournamentManagerPlugin(BotPlugin):
         [Admin] Remove a linked Discord channel from a tournament.
         E.g. !remove channel fornite #fortnite-tournament
         """
-        if alias not in self["tournaments"]:
-            return "Tournament not found."
+        try:
+            with update_tournament(self, alias) as tournament:
+                tournament = self.tournament_service.remove_match(tournament, match_name)
+        except AppError as err:
+            return err
 
-        with self.mutable("tournaments") as tournaments:
-            tournament = Tournament.from_dict(tournaments[alias])
-            match = tournament.find_match_by_name(match_name)
-            if not match:
-                return "Match not found"
-
-            tournament.matches.remove(match)
-
-            # Save tournament changes to db
-            tournaments.update({alias: tournament.to_dict()})
-            return f"Match `{match_name}` successfully removed from the tournament"
+        return f"Match `{match_name}` successfully removed from the tournament"
 
     @arg_botcmd("match_name", type=str)
     @private_message_only
@@ -873,21 +810,16 @@ class TournamentManagerPlugin(BotPlugin):
         [Admin] Remove a team from a tournament.
         E.g. `!remove team fortnite 123456789`
         """
-        if alias not in self["tournaments"]:
-            return "Tournament not found"
-        tournament = self._get_tournament(alias)
-
         try:
-            team = self.tournament_service.remove_tournament_team(tournament, team_id)
+            with update_tournament(self, alias) as tournament:
+                team = self.tournament_service.remove_tournament_team(tournament, team_id)
+                if team.captain:
+                    self._remove_discord_team_captain(
+                        self.build_identifier(team.captain), tournament.captain_role
+                    )
         except AppError as err:
             return err
 
-        if team.captain:
-            self._remove_discord_team_captain(
-                self.build_identifier(team.captain), tournament.captain_role
-            )
-
-        self._save_tournament(alias, tournament)
         return f"Team {team.name} successfully removed."
 
     @arg_botcmd("alias", type=str, admin_only=True)
@@ -913,26 +845,14 @@ class TournamentManagerPlugin(BotPlugin):
         [Admin] Force the match status state.
         E.g. !set match status fortnite match_1 completed
         """
-        if alias not in self["tournaments"]:
-            return "Tournament not found"
+        try:
+            with update_tournament(self, alias) as tournament:
+                match = self.tournament_service.get_match_by_name(tournament, match_name)
+                self.match_service.set_match_status(match, status)
+        except AppError as err:
+            return err
 
-        with self.mutable("tournaments") as tournaments:
-            tournament = Tournament.from_dict(tournaments[alias])
-            match = tournament.find_match_by_name(match_name)
-            if not match:
-                return "Match not found"
-
-            if not hasattr(MatchStatus, status.upper()):
-                return (
-                    f"Match status `{status}` doesn't exists. "
-                    f"Choices are: {[s.name for s in MatchStatus]}"
-                )
-
-            match.status = MatchStatus[status.upper()]
-
-            # Save tournament changes to db
-            tournaments.update({alias: tournament.to_dict()})
-            return f"Match `{match_name}` status set to `{status.upper()}`."
+        return f"Match `{match_name}` status set to `{status.upper()}`."
 
     @arg_botcmd("team_id", type=int)
     @arg_botcmd("alias", type=str)
@@ -942,21 +862,16 @@ class TournamentManagerPlugin(BotPlugin):
         [Admin] Reset a team information and linked captain.
         E.g. `!reset team fortnite 123456789`
         """
-        if alias not in self["tournaments"]:
-            return "Tournament not found"
-        tournament = self._get_tournament(alias)
-
         try:
-            team = self.tournament_service.reset_tournament_team(tournament, team_id)
+            with update_tournament(self, alias) as tournament:
+                team = self.tournament_service.reset_tournament_team(tournament, team_id)
+                if team.captain:
+                    self._remove_discord_team_captain(
+                        self.build_identifier(team.captain), tournament.captain_role
+                    )
         except AppError as err:
             return err
 
-        if team.captain:
-            self._remove_discord_team_captain(
-                self.build_identifier(team.captain), tournament.captain_role
-            )
-
-        self._save_tournament(alias, tournament)
         return f"Team {team.name} successfully updated."
 
     @arg_botcmd("match_name", type=str)
