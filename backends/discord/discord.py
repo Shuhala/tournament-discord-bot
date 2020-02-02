@@ -386,7 +386,7 @@ class DiscordRoom(Room, DiscordSender):
         return self._channel_id
 
     def discord_channel(
-        self
+        self,
     ) -> Optional[Union[discord.abc.GuildChannel, discord.abc.PrivateChannel]]:
         return DiscordBackend.client.get_channel(self._channel_id)
 
@@ -545,7 +545,7 @@ class DiscordBackend(ErrBot):
             limit = min(
                 int(self.bot_config.MESSAGE_SIZE_LIMIT), DISCORD_MESSAGE_SIZE_LIMIT
             )
-        except (AttributeError, ValueError) as e:
+        except (AttributeError, ValueError):
             limit = DISCORD_MESSAGE_SIZE_LIMIT
         return limit
 
@@ -750,7 +750,7 @@ class DiscordBackend(ErrBot):
                 # we want to retrieve any exceptions to make sure that
                 # they don't nag us about it being un-retrieved.
                 gathered.exception()
-            except Exception as _:
+            except Exception:
                 pass
             self.disconnect_callback()
             return True
