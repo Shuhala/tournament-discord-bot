@@ -1,0 +1,31 @@
+{
+  "custom_fields": {},
+  "lineup": [
+    {
+      "name": "Player 1",
+      "email": "test1@gmail.com",
+      "user_id": "1",
+      "custom_user_identifier": null,
+      "custom_fields": {
+        "seat_id": "v1"
+      }
+    },
+    {
+      "name": "Player 2",
+      "email": "test2@gmail.com",
+      "user_id": "2",
+      "custom_user_identifier": null,
+      "custom_fields": {
+        "seat_id": "v2"
+      }
+    }
+  ],
+  "id": "1",
+  "name": "Team A",
+  "email": "teama@gmail.com",
+  "user_id": "123",
+  "custom_user_identifier": null,
+  "checked_in": false,
+  "checked_in_at": null,
+  "created_at": "2019-08-01T02:46:23+00:00"
+}

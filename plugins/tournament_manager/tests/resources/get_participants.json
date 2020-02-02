@@ -1,0 +1,96 @@
+[
+  {
+    "id": "1",
+    "name": "Team A",
+    "custom_fields": {},
+    "lineup": [
+      {
+        "name": "Player 1",
+        "custom_fields": {
+          "seat_id": "K9"
+        }
+      },
+      {
+        "name": "Player 2",
+        "custom_fields": {
+          "seat_id": "K10"
+        }
+      },
+      {
+        "name": "Player 3",
+        "custom_fields": {
+          "seat_id": "O8"
+        }
+      }
+    ]
+  },
+  {
+    "id": "2",
+    "name": "Team B",
+    "custom_fields": {},
+    "lineup": [
+      {
+        "name": "Gekiedo",
+        "custom_fields": {
+          "seat_id": "v1"
+        }
+      },
+      {
+        "name": "Xenvoh",
+        "custom_fields": {
+          "seat_id": "v2"
+        }
+      }
+    ]
+  },
+  {
+    "id": "3",
+    "name": "Team C",
+    "custom_fields": {},
+    "lineup": [
+      {
+        "name": "MPK Eyerus",
+        "custom_fields": {
+          "seat_id": "J:21"
+        }
+      },
+      {
+        "name": "тxя",
+        "custom_fields": {
+          "seat_id": "j:20"
+        }
+      },
+      {
+        "name": "Phoq愛",
+        "custom_fields": {
+          "seat_id": "j:19"
+        }
+      }
+    ]
+  },
+  {
+    "id": "4",
+    "name": "Team D",
+    "custom_fields": {},
+    "lineup": [
+      {
+        "name": "BRK Lemon",
+        "custom_fields": {
+          "seat_id": "S2"
+        }
+      },
+      {
+        "name": "LYS Kronos",
+        "custom_fields": {
+          "seat_id": "S1"
+        }
+      },
+      {
+        "name": "Brk SwitchZ",
+        "custom_fields": {
+          "seat_id": "S3"
+        }
+      }
+    ]
+  }
+]
