@@ -524,7 +524,10 @@ class DiscordBackend(ErrBot):
             sys.exit(1)
         self.bot_identifier = None
 
-        DiscordBackend.client = discord.Client()
+        intents = discord.Intents.default()
+        intents.members = True
+
+        DiscordBackend.client = discord.Client(intents=intents)
         # Register discord event coroutines.
         for fn in [
             self.on_ready,
